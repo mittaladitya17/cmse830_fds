@@ -1,35 +1,56 @@
-# --- app.py ---
 import streamlit as st
 import pandas as pd
-import joblib
-import seaborn as sns
+import numpy as np
 import matplotlib.pyplot as plt
-import os, joblib
-import os
+import seaborn as sns
+import joblib
 from pathlib import Path
+from sklearn.metrics import (
+    roc_auc_score,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+)
+
 import plotly.express as px
 
-
-HERE = Path(__file__).resolve().parent      # .../finance-risk-dashboard/src
-ROOT = HERE.parent                          # .../finance-risk-dashboard
+# ---------------------------------------------------
+# Paths
+# ---------------------------------------------------
+HERE = Path(__file__).resolve().parent       # .../src
+ROOT = HERE.parent                           # .../cmse830_fds
 DATA_DIR = ROOT / "data"
 MODELS_DIR = ROOT / "models"
 
-DATA_PATH = DATA_DIR / "home_credit_sample.csv"   # new bigger dataset
+DATA_PATH_CREDIT = DATA_DIR / "credit-g.csv"
+DATA_PATH_HOME = DATA_DIR / "home_credit_sample.csv"
+
+# Prefer the new Home Credit sample; fall back to old German credit if needed
+if DATA_PATH_HOME.exists():
+    ACTIVE_DATA_PATH = DATA_PATH_HOME
+    ACTIVE_DATA_NAME = "Home Credit Sample (Kaggle)"
+else:
+    ACTIVE_DATA_PATH = DATA_PATH_CREDIT
+    ACTIVE_DATA_NAME = "German Credit (UCI)"
+
 MODEL_PATH = MODELS_DIR / "credit_pipeline.joblib"
-META_PATH  = MODELS_DIR / "metadata.joblib"
+META_PATH = MODELS_DIR / "metadata.joblib"
+
 
 def require_file(p: Path, label: str):
+    """
+    Small helper: makes sure a file exists and gives a nice error if not.
+    """
     if not p.exists():
         raise FileNotFoundError(f"{label} not found at: {p}")
     return p
 
-st.title("Credit Risk Analysis Dashboard")
-st.markdown("""
-This dashboard predicts **loan default risk** using the German Credit dataset.
-It includes data exploration, visualization, and a simple ML model built with Logistic Regression.
-""")
 
+# ---------------------------------------------------
+# Load model + metadata
+# ---------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def load_model():
     pipe = joblib.load(require_file(MODEL_PATH, "Model"))
@@ -37,216 +58,293 @@ def load_model():
     return pipe, meta
 
 
+# ---------------------------------------------------
+# Load dataset used for EDA
+# ---------------------------------------------------
+@st.cache_data(show_spinner=False)
+def load_data():
+    df = pd.read_csv(ACTIVE_DATA_PATH)
+    return df
+
+
 pipe, meta = load_model()
+df = load_data()
 
-tab1, tab2, tab3, tab4 = st.tabs(["Overview", "EDA", "Single Prediction", "Batch Prediction"])
+# Try to guess the target column (for metrics & some plots)
+if "TARGET" in df.columns:
+    TARGET_COL = "TARGET"
+elif "class" in df.columns:
+    TARGET_COL = "class"
+else:
+    TARGET_COL = None
 
-# --- Tab 1: Project Overview ---
+st.title("Credit Risk Analysis Dashboard")
+
+# ---------------------------------------------------
+# Tabs
+# ---------------------------------------------------
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["Overview", "EDA", "Model Metrics", "Single Prediction", "Batch Prediction"]
+)
+
+# ---------------------------------------------------
+# Tab 1: Overview
+# ---------------------------------------------------
 with tab1:
     st.subheader("What This App Does")
-    st.markdown("""
-    - Predict whether a loan applicant is likely to default.
-    - Explore key features and patterns in the dataset through interactive EDA.
-    - Test the ML model on single applicants or batch files.
-    - Understand model performance metrics and feature importance (coming soon!).
-    """)
 
-    st.subheader("Dataset Info")
-    st.markdown("""
-    - Source: [UCI / OpenML German Credit Dataset](https://www.openml.org/d/31)  
-    - Records: ~1000 applicants  
-    - Target: `good` (repays) or `bad` (default)  
-    - Features: Demographics, financial status, loan attributes, etc.
-    """)
+    st.markdown(
+        f"""
+**Dataset in use:** `{ACTIVE_DATA_NAME}`  
 
-    with st.expander("Modeling Notes"):
-        st.markdown("""
-        - Model: **Logistic Regression** (`class_weight='balanced'`, `max_iter=1000`)  
-        - Preprocessing: OneHotEncoder (categoricals), StandardScaler (numerics)  
-        - Train/test split with stratification; primary metric: **ROC AUC**  
-        - Threshold tuning and feature importance coming soon.
-        """)
+This dashboard is a mini **credit risk / default prediction system**.  
+It demonstrates a realistic workflow that a bank or lending company might use:
 
-    with st.expander("Roadmap (Next 50%)"):
-        st.markdown("""
-        - Feature importance (coefficients, SHAP)  
-        - Model comparison (RandomForest, XGBoost)  
-        - Cost-sensitive thresholds for business KPIs  
-        - Deploy to Hugging Face / Streamlit Cloud  
-        """)
+- Load a real-world credit dataset (now using a **larger Home Credit sample**).
+- Perform **initial data analysis and EDA** to understand applicants and risk drivers.
+- Train a **machine learning model** to predict probability of default.
+- Make **single-applicant predictions** and **batch predictions** from uploaded CSVs.
+- View **model performance metrics** for transparency.
 
+During the project I experimented with multiple models:
 
-# ---- Tab 2: EDA + Model Metrics ----
-with tab2:
-    st.subheader("Exploratory Data Analysis (Home Credit Sample)")
+- **Logistic Regression** (baseline, interpretable model)
+- **Tree-based models** like **Random Forest** and **Gradient Boosting / XGBoost** (more flexible, non-linear)
+- Compared them using metrics like **ROC AUC, accuracy, precision, recall, and F1**.
 
-    # load data
-    df = pd.read_csv(DATA_PATH)
-
-    st.write(f"Rows: {df.shape[0]}, Columns: {df.shape[1]}")
-    st.dataframe(df.head())
-
-    # target distribution
-    if "TARGET" in df.columns:
-        st.markdown("### Target Distribution (0 = repaid, 1 = default)")
-        fig = px.histogram(df, x="TARGET")
-        st.plotly_chart(fig, use_container_width=True)
-
-    # numeric correlation heatmap (first 20 numeric cols to keep it light)
-    st.markdown("### Correlation Heatmap (numeric features)")
-    num_cols = df.select_dtypes(include="number").columns.tolist()
-    num_subset = num_cols[:20]   # don't plot all, just a subset
-    corr = df[num_subset].corr()
-    fig_corr = px.imshow(corr, text_auto=True, aspect="auto")
-    st.plotly_chart(fig_corr, use_container_width=True)
-
-    # some feature vs TARGET plots (only if columns exist)
-    st.markdown("### Key Features vs Default Probability")
-
-    if {"AMT_CREDIT", "TARGET"} <= set(df.columns):
-        fig_credit = px.histogram(
-            df, x="AMT_CREDIT", color="TARGET", barmode="overlay",
-            nbins=50,
-            title="Credit Amount vs Target"
-        )
-        fig_credit.update_layout(xaxis_title="AMT_CREDIT", yaxis_title="Count")
-        st.plotly_chart(fig_credit, use_container_width=True)
-
-    if {"AMT_INCOME_TOTAL", "TARGET"} <= set(df.columns):
-        fig_income = px.histogram(
-            df, x="AMT_INCOME_TOTAL", color="TARGET", barmode="overlay",
-            nbins=50,
-            title="Income vs Target"
-        )
-        fig_income.update_layout(xaxis_title="AMT_INCOME_TOTAL", yaxis_title="Count")
-        st.plotly_chart(fig_income, use_container_width=True)
-
-    # ----- Model metrics from training -----
-    st.markdown("### Model Performance (Saved from Training Script)")
-
-    metrics = meta.get("metrics", {})
-    if metrics:
-        metrics_df = pd.DataFrame(metrics).T  # models as rows
-        st.dataframe(metrics_df)
-
-        # simple bar chart of ROC AUC
-        if "roc_auc" in metrics_df.columns:
-            fig_auc = px.bar(
-                metrics_df.reset_index(),
-                x="index",
-                y="roc_auc",
-                title="ROC AUC by Model"
-            )
-            fig_auc.update_layout(xaxis_title="Model", yaxis_title="ROC AUC")
-            st.plotly_chart(fig_auc, use_container_width=True)
-
-        st.info(f"Best model (by ROC AUC): **{meta.get('best_model', 'unknown')}**")
-    else:
-        st.warning("No metric information found in metadata.")
-
-
-# --- Tab 3 ---
-with tab3:
-    st.subheader("Single Applicant Prediction")
-    input_data = {}
-    for col in meta["all_cols"]:
-        input_data[col] = [st.text_input(f"Enter {col}:")]
-
-    if st.button("Predict"):
-        df_input = pd.DataFrame(input_data)
-        prob = pipe.predict_proba(df_input)[:, 1][0]
-        st.metric("Default Probability", f"{prob:.2%}")
-
-# --- Tab 4: Batch Prediction ---
-with tab4:
-    st.header("Batch Prediction")
-
-    # load full dataset once for examples / schema
-    df_full = pd.read_csv(require_file(DATA_PATH, "Dataset"))
-    X_full = df_full.drop(columns=["class"])
-
-    st.markdown("**Required columns (exact names):**")
-    st.code(", ".join(meta["all_cols"]), language="text")
-
-    # ---- Download a VALID sample (5 real rows, correct types) ----
-    st.subheader("Download Sample CSV (valid schema)")
-    sample_df = X_full.head(5).copy()  # 5 valid rows (no target column)
-    st.download_button(
-        "Download sample_batch.csv",
-        data=sample_df.to_csv(index=False),
-        file_name="sample_batch.csv",
-        mime="text/csv",
-        help="Use this as a starting point"
+For deployment, the app currently uses the trained pipeline saved as  
+`models/credit_pipeline.joblib` with preprocessing + classifier bundled together.
+        """
     )
 
-    st.write("---")
-    st.subheader("Upload Your CSV")
+    st.info(
+        "Note: The app is designed so the backend model can be swapped out later "
+        "without changing the Streamlit UI. Only the saved pipeline and metadata need updating."
+    )
 
-    file = st.file_uploader("Upload CSV with the columns above", type=["csv"])
+# ---------------------------------------------------
+# Tab 2: EDA
+# ---------------------------------------------------
+with tab2:
+    st.subheader("Exploratory Data Analysis (EDA)")
 
-    def coerce_schema(df_in: pd.DataFrame) -> pd.DataFrame:
-        """Ensure uploaded data matches training schema: columns, order, dtypes."""
-        df = df_in.copy()
+    st.markdown(
+        f"""
+We are currently exploring: **{ACTIVE_DATA_NAME}**  
 
-        # Add any missing columns as NaN; ignore extra columns
-        for col in meta["all_cols"]:
-            if col not in df.columns:
-                df[col] = pd.NA
-        df = df[meta["all_cols"]]  # reorder / drop extras
+Below are a few quick views to understand the structure of the data and check for patterns
+that might be related to credit risk.
+        """
+    )
 
-        # Split by type
-        cat_cols = meta["cat_cols"]
-        num_cols = meta["num_cols"]
+    st.write("**Dataset preview**")
+    st.dataframe(df.head())
 
-        # Coerce numerics
-        for col in num_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    # Detect numeric and categorical columns for EDA
+    num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+    cat_cols = df.select_dtypes(exclude=["number"]).columns.tolist()
 
-        # Fill missing: simple defaults (your pipeline can still handle NaN, but this reduces errors)
-        df[cat_cols] = df[cat_cols].fillna("unknown")
-        for col in num_cols:
-            # use training medians as safe numeric imputation (fallback to 0 if all NaN)
-            median_val = pd.to_numeric(X_full[col], errors="coerce").median()
-            df[col] = df[col].fillna(median_val if pd.notna(median_val) else 0)
+    # 1) Target distribution
+    if TARGET_COL is not None and TARGET_COL in df.columns:
+        st.write(f"**Target distribution: `{TARGET_COL}`**")
+        fig, ax = plt.subplots()
+        df[TARGET_COL].value_counts().plot(kind="bar", ax=ax)
+        ax.set_xlabel(TARGET_COL)
+        ax.set_ylabel("Count")
+        st.pyplot(fig)
+    else:
+        st.warning("Target column not found – cannot show target distribution.")
 
-        # Ensure categorical are strings
-        for col in cat_cols:
-            df[col] = df[col].astype(str)
+    # 2) Numeric column histogram (selectable)
+    if num_cols:
+        st.write("**Histogram of a numeric feature**")
+        col_choice = st.selectbox("Choose a numeric column", num_cols)
+        fig, ax = plt.subplots()
+        ax.hist(df[col_choice].dropna(), bins=40)
+        ax.set_xlabel(col_choice)
+        ax.set_ylabel("Frequency")
+        st.pyplot(fig)
 
-        return df
+    # 3) Correlation heatmap (numeric variables)
+    if len(num_cols) >= 2:
+        st.write("**Correlation heatmap (numeric features)**")
+        corr = df[num_cols].corr()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.heatmap(corr, annot=False, cmap="coolwarm", ax=ax)
+        st.pyplot(fig)
 
-    if file:
+    # 4) Simple Plotly scatter (numeric vs target / another numeric)
+    if len(num_cols) >= 2:
+        st.write("**Interactive scatter plot (Plotly)**")
+        x_var = st.selectbox("X axis", num_cols, index=0, key="eda_x")
+        y_var = st.selectbox("Y axis", num_cols, index=1, key="eda_y")
+
+        color_opt = TARGET_COL if TARGET_COL in df.columns else None
+        fig_scatter = px.scatter(
+            df.sample(min(len(df), 5000)),  # sample to keep it light
+            x=x_var,
+            y=y_var,
+            color=color_opt,
+            title=f"{x_var} vs {y_var}",
+            opacity=0.6,
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+# ---------------------------------------------------
+# Tab 3: Model Metrics
+# ---------------------------------------------------
+with tab3:
+    st.subheader("Model Performance Metrics")
+
+    if TARGET_COL is None or TARGET_COL not in df.columns:
+        st.warning(
+            "Could not detect a target column (e.g., 'TARGET' or 'class'). "
+            "Metrics cannot be computed."
+        )
+    else:
+        st.markdown(
+            """
+These metrics are computed by evaluating the **saved pipeline** on the current dataset.
+This is mainly to get a sense of how well the model separates good vs. bad credit.
+
+*(In a more rigorous setup, we would compute these on a separate test or validation set.)*
+            """
+        )
+
+        # Build X, y according to dataset
+        if TARGET_COL == "class":
+            # German dataset: 'good' / 'bad'
+            y = (df[TARGET_COL] == "bad").astype(int)
+        else:
+            # Home Credit: 0/1
+            y = df[TARGET_COL].astype(int)
+
+        X = df.drop(columns=[TARGET_COL])
+
+        # Predict probabilities and labels
         try:
-            user_df_raw = pd.read_csv(file)
-            st.write("**Uploaded preview:**")
-            st.dataframe(user_df_raw.head())
+            y_proba = pipe.predict_proba(X)[:, 1]
+            y_pred = (y_proba >= 0.5).astype(int)
 
-            # Validate at least required columns exist
-            missing = [c for c in meta["all_cols"] if c not in user_df_raw.columns]
-            if missing:
-                st.error(f"Missing required columns: {missing}")
-                st.stop()
+            metrics = {
+                "ROC AUC": roc_auc_score(y, y_proba),
+                "Accuracy": accuracy_score(y, y_pred),
+                "Precision": precision_score(y, y_pred, zero_division=0),
+                "Recall": recall_score(y, y_pred, zero_division=0),
+                "F1-score": f1_score(y, y_pred, zero_division=0),
+            }
 
-            # Coerce to training schema + dtypes
-            user_df = coerce_schema(user_df_raw)
+            st.write("**Summary metrics**")
+            st.dataframe(
+                pd.DataFrame(metrics, index=["Model"]).T.rename(columns={"Model": "Value"})
+            )
 
-            # Predict probabilities
-            probs = pipe.predict_proba(user_df)[:, 1]
-            results = user_df.copy()
-            results["default_risk_prob"] = probs
+            # Confusion matrix
+            cm = confusion_matrix(y, y_pred)
+            st.write("**Confusion matrix**")
+            cm_df = pd.DataFrame(
+                cm,
+                index=["Actual 0 (no default)", "Actual 1 (default)"],
+                columns=["Pred 0", "Pred 1"],
+            )
+            st.dataframe(cm_df)
 
-            st.success("✅ Scoring complete!")
-            st.dataframe(results.head())
+        except Exception as e:
+            st.error(
+                f"Could not compute metrics from the pipeline. "
+                f"Error: {e}"
+            )
 
+# ---------------------------------------------------
+# Tab 4: Single Prediction
+# ---------------------------------------------------
+with tab4:
+    st.subheader("Single Applicant Prediction")
+
+    st.markdown(
+        """
+Fill in the applicant’s information below.  
+The app will run the input through the same preprocessing + model pipeline
+and output a **default probability**.
+        """
+    )
+
+    input_data = {}
+
+    # Use metadata to decide which columns are numeric/categorical
+    all_cols = meta.get("all_cols", [])
+    cat_cols = meta.get("cat_cols", [])
+    num_cols_meta = meta.get("num_cols", [])
+
+    # Use df to get sensible defaults / choices where possible
+    for col in all_cols:
+        if col in num_cols_meta:
+            default_val = (
+                float(df[col].median()) if col in df.columns and df[col].notna().any() else 0.0
+            )
+            val = st.number_input(col, value=default_val)
+            input_data[col] = [val]
+        else:
+            # categorical – use unique values from df if available
+            if col in df.columns:
+                options = sorted(df[col].dropna().unique().tolist())
+                if len(options) > 0:
+                    val = st.selectbox(col, options)
+                else:
+                    val = st.text_input(col)
+            else:
+                val = st.text_input(col)
+            input_data[col] = [val]
+
+    if st.button("Predict default risk"):
+        df_input = pd.DataFrame(input_data)
+        try:
+            prob = pipe.predict_proba(df_input)[:, 1][0]
+            st.metric("Predicted default probability", f"{prob:.2%}")
+            if prob > 0.5:
+                st.warning("Model view: **High risk** of default.")
+            else:
+                st.success("Model view: **Lower risk** of default.")
+        except Exception as e:
+            st.error(f"Could not generate prediction. Error: {e}")
+
+# ---------------------------------------------------
+# Tab 5: Batch Prediction
+# ---------------------------------------------------
+with tab5:
+    st.subheader("Batch CSV Prediction")
+
+    st.markdown(
+        """
+Upload a CSV with the same feature columns that the model expects  
+(the same schema as the training data, without the target column).  
+
+The app will return a file with an extra column containing **default probability**.
+        """
+    )
+
+    uploaded = st.file_uploader("Upload CSV file", type=["csv"])
+
+    if uploaded is not None:
+        try:
+            batch_df = pd.read_csv(uploaded)
+            st.write("Input preview:")
+            st.dataframe(batch_df.head())
+
+            probs = pipe.predict_proba(batch_df)[:, 1]
+            batch_df["default_probability"] = probs
+
+            st.write("Preview with predictions:")
+            st.dataframe(batch_df.head())
+
+            # Download link
+            csv_bytes = batch_df.to_csv(index=False).encode("utf-8")
             st.download_button(
-                "Download results.csv",
-                data=results.to_csv(index=False),
-                file_name="results.csv",
-                mime="text/csv"
+                "Download predictions as CSV",
+                data=csv_bytes,
+                file_name="batch_predictions.csv",
+                mime="text/csv",
             )
 
         except Exception as e:
-            st.error(f"❌ Could not score file: {e}")
-            st.info("Tip: Start from the **Download sample_batch.csv** above and edit values.")
-
-
+            st.error(f"Error while scoring batch file: {e}")
