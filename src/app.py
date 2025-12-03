@@ -1,56 +1,37 @@
+from pathlib import Path
 import streamlit as st
 import pandas as pd
-import numpy as np
+import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
-import joblib
-from pathlib import Path
-from sklearn.metrics import (
-    roc_auc_score,
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    confusion_matrix,
-)
-
+from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
 import plotly.express as px
 
-# ---------------------------------------------------
-# Paths
-# ---------------------------------------------------
-HERE = Path(__file__).resolve().parent       # .../src
-ROOT = HERE.parent                           # .../cmse830_fds
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
 DATA_DIR = ROOT / "data"
 MODELS_DIR = ROOT / "models"
 
-DATA_PATH_CREDIT = DATA_DIR / "credit-g.csv"
-DATA_PATH_HOME = DATA_DIR / "home_credit_sample.csv"
-
-# Prefer the new Home Credit sample; fall back to old German credit if needed
-if DATA_PATH_HOME.exists():
-    ACTIVE_DATA_PATH = DATA_PATH_HOME
-    ACTIVE_DATA_NAME = "Home Credit Sample (Kaggle)"
-else:
-    ACTIVE_DATA_PATH = DATA_PATH_CREDIT
-    ACTIVE_DATA_NAME = "German Credit (UCI)"
+GERMAN_PATH = DATA_DIR / "credit-g.csv"          # model dataset
+HOME_PATH   = DATA_DIR / "home_credit_sample.csv"  # bigger sample
 
 MODEL_PATH = MODELS_DIR / "credit_pipeline.joblib"
-META_PATH = MODELS_DIR / "metadata.joblib"
+META_PATH  = MODELS_DIR / "metadata.joblib"
 
 
 def require_file(p: Path, label: str):
-    """
-    Small helper: makes sure a file exists and gives a nice error if not.
-    """
     if not p.exists():
         raise FileNotFoundError(f"{label} not found at: {p}")
     return p
 
 
-# ---------------------------------------------------
-# Load model + metadata
-# ---------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def load_data():
+    df_german = pd.read_csv(require_file(GERMAN_PATH, "German credit data"))
+    df_home   = pd.read_csv(require_file(HOME_PATH, "Home Credit sample"))
+    return df_german, df_home
+
+
 @st.cache_resource(show_spinner=False)
 def load_model():
     pipe = joblib.load(require_file(MODEL_PATH, "Model"))
@@ -58,17 +39,9 @@ def load_model():
     return pipe, meta
 
 
-# ---------------------------------------------------
-# Load dataset used for EDA
-# ---------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_data():
-    df = pd.read_csv(ACTIVE_DATA_PATH)
-    return df
-
-
+df_german, df_home = load_data()
 pipe, meta = load_model()
-df = load_data()
+
 
 # Try to guess the target column (for metrics & some plots)
 if "TARGET" in df.columns:
@@ -126,69 +99,37 @@ For deployment, the app currently uses the trained pipeline saved as
 # Tab 2: EDA
 # ---------------------------------------------------
 with tab2:
-    st.subheader("Exploratory Data Analysis (EDA)")
+    st.subheader("Exploratory Data Analysis (Home Credit Sample)")
 
-    st.markdown(
-        f"""
-We are currently exploring: **{ACTIVE_DATA_NAME}**  
+    st.write("Shape:", df_home.shape)
+    st.write("Preview:")
+    st.dataframe(df_home.head())
 
-Below are a few quick views to understand the structure of the data and check for patterns
-that might be related to credit risk.
-        """
-    )
-
-    st.write("**Dataset preview**")
-    st.dataframe(df.head())
-
-    # Detect numeric and categorical columns for EDA
-    num_cols = df.select_dtypes(include=["number"]).columns.tolist()
-    cat_cols = df.select_dtypes(exclude=["number"]).columns.tolist()
-
-    # 1) Target distribution
-    if TARGET_COL is not None and TARGET_COL in df.columns:
-        st.write(f"**Target distribution: `{TARGET_COL}`**")
+    st.markdown("### Target distribution")
+    if "TARGET" in df_home.columns:
         fig, ax = plt.subplots()
-        df[TARGET_COL].value_counts().plot(kind="bar", ax=ax)
-        ax.set_xlabel(TARGET_COL)
-        ax.set_ylabel("Count")
-        st.pyplot(fig)
-    else:
-        st.warning("Target column not found – cannot show target distribution.")
-
-    # 2) Numeric column histogram (selectable)
-    if num_cols:
-        st.write("**Histogram of a numeric feature**")
-        col_choice = st.selectbox("Choose a numeric column", num_cols)
-        fig, ax = plt.subplots()
-        ax.hist(df[col_choice].dropna(), bins=40)
-        ax.set_xlabel(col_choice)
-        ax.set_ylabel("Frequency")
+        df_home["TARGET"].value_counts().plot(kind="bar", ax=ax)
+        ax.set_xlabel("Default (1 = yes, 0 = no)")
         st.pyplot(fig)
 
-    # 3) Correlation heatmap (numeric variables)
-    if len(num_cols) >= 2:
-        st.write("**Correlation heatmap (numeric features)**")
-        corr = df[num_cols].corr()
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.heatmap(corr, annot=False, cmap="coolwarm", ax=ax)
-        st.pyplot(fig)
+    st.markdown("### Numeric correlations")
+    num_cols = df_home.select_dtypes(include="number").columns
+    corr = df_home[num_cols].corr()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(corr, ax=ax)
+    st.pyplot(fig)
 
-    # 4) Simple Plotly scatter (numeric vs target / another numeric)
-    if len(num_cols) >= 2:
-        st.write("**Interactive scatter plot (Plotly)**")
-        x_var = st.selectbox("X axis", num_cols, index=0, key="eda_x")
-        y_var = st.selectbox("Y axis", num_cols, index=1, key="eda_y")
-
-        color_opt = TARGET_COL if TARGET_COL in df.columns else None
-        fig_scatter = px.scatter(
-            df.sample(min(len(df), 5000)),  # sample to keep it light
-            x=x_var,
-            y=y_var,
-            color=color_opt,
-            title=f"{x_var} vs {y_var}",
-            opacity=0.6,
+    st.markdown("### Example Plotly scatter")
+    if "AMT_CREDIT" in df_home.columns and "AMT_INCOME_TOTAL" in df_home.columns:
+        fig = px.scatter(
+            df_home.sample(min(3000, len(df_home))), 
+            x="AMT_INCOME_TOTAL", 
+            y="AMT_CREDIT",
+            color="TARGET" if "TARGET" in df_home.columns else None,
+            title="Credit Amount vs Income"
         )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
+
 
 # ---------------------------------------------------
 # Tab 3: Model Metrics
@@ -196,64 +137,47 @@ that might be related to credit risk.
 with tab3:
     st.subheader("Model Performance Metrics")
 
-    if TARGET_COL is None or TARGET_COL not in df.columns:
-        st.warning(
-            "Could not detect a target column (e.g., 'TARGET' or 'class'). "
-            "Metrics cannot be computed."
-        )
-    else:
-        st.markdown(
-            """
-These metrics are computed by evaluating the **saved pipeline** on the current dataset.
-This is mainly to get a sense of how well the model separates good vs. bad credit.
+    st.markdown(
+        """
+        These metrics are computed using the **German Credit** dataset, which is the data
+        the current logistic regression model was trained on.
 
-*(In a more rigorous setup, we would compute these on a separate test or validation set.)*
-            """
-        )
+        In a more rigorous setup, we would compute these on a separate validation or test set.
+        """
+    )
 
-        # Build X, y according to dataset
-        if TARGET_COL == "class":
-            # German dataset: 'good' / 'bad'
-            y = (df[TARGET_COL] == "bad").astype(int)
-        else:
-            # Home Credit: 0/1
-            y = df[TARGET_COL].astype(int)
+    try:
+        # y: 1 = bad credit, 0 = good
+        y = (df_german["class"] == "bad").astype(int)
 
-        X = df.drop(columns=[TARGET_COL])
+        # X: make sure we pass exactly the columns the pipeline expects
+        X = df_german[meta["all_cols"]]
 
-        # Predict probabilities and labels
-        try:
-            y_proba = pipe.predict_proba(X)[:, 1]
-            y_pred = (y_proba >= 0.5).astype(int)
+        proba = pipe.predict_proba(X)[:, 1]
+        y_pred = (proba >= 0.5).astype(int)
 
-            metrics = {
-                "ROC AUC": roc_auc_score(y, y_proba),
-                "Accuracy": accuracy_score(y, y_pred),
-                "Precision": precision_score(y, y_pred, zero_division=0),
-                "Recall": recall_score(y, y_pred, zero_division=0),
-                "F1-score": f1_score(y, y_pred, zero_division=0),
-            }
+        roc = roc_auc_score(y, proba)
+        acc = (y_pred == y).mean()
 
-            st.write("**Summary metrics**")
-            st.dataframe(
-                pd.DataFrame(metrics, index=["Model"]).T.rename(columns={"Model": "Value"})
-            )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("ROC AUC", f"{roc:.3f}")
+        with c2:
+            st.metric("Accuracy", f"{acc:.3f}")
 
-            # Confusion matrix
-            cm = confusion_matrix(y, y_pred)
-            st.write("**Confusion matrix**")
-            cm_df = pd.DataFrame(
-                cm,
-                index=["Actual 0 (no default)", "Actual 1 (default)"],
-                columns=["Pred 0", "Pred 1"],
-            )
-            st.dataframe(cm_df)
+        st.markdown("### Classification Report")
+        st.text(classification_report(y, y_pred, digits=3))
 
-        except Exception as e:
-            st.error(
-                f"Could not compute metrics from the pipeline. "
-                f"Error: {e}"
-            )
+        st.markdown("### Confusion Matrix")
+        cm = confusion_matrix(y, y_pred)
+        fig, ax = plt.subplots()
+        sns.heatmap(cm, annot=True, fmt="d", ax=ax)
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("True")
+        st.pyplot(fig)
+
+    except Exception as e:
+        st.error(f"Could not compute metrics from the pipeline. Error: {e}")
 
 # ---------------------------------------------------
 # Tab 4: Single Prediction
