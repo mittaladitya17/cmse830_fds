@@ -15,7 +15,7 @@ ROOT = HERE.parent                          # .../finance-risk-dashboard
 DATA_DIR = ROOT / "data"
 MODELS_DIR = ROOT / "models"
 
-DATA_PATH  = DATA_DIR / "credit-g.csv"
+DATA_PATH = DATA_DIR / "home_credit_sample.csv"   # new bigger dataset
 MODEL_PATH = MODELS_DIR / "credit_pipeline.joblib"
 META_PATH  = MODELS_DIR / "metadata.joblib"
 
@@ -35,6 +35,7 @@ def load_model():
     pipe = joblib.load(require_file(MODEL_PATH, "Model"))
     meta = joblib.load(require_file(META_PATH, "Metadata"))
     return pipe, meta
+
 
 pipe, meta = load_model()
 
@@ -75,70 +76,73 @@ with tab1:
         """)
 
 
-# --- Tab 2: EDA ---
+# ---- Tab 2: EDA + Model Metrics ----
 with tab2:
-    st.subheader("Dataset Preview")
+    st.subheader("Exploratory Data Analysis (Home Credit Sample)")
 
-    # NOTE: these two lines must be indented exactly 4 spaces under 'with tab2:'
-    df = pd.read_csv(require_file(DATA_PATH, "Dataset"))
+    # load data
+    df = pd.read_csv(DATA_PATH)
+
+    st.write(f"Rows: {df.shape[0]}, Columns: {df.shape[1]}")
     st.dataframe(df.head())
 
-    st.subheader("Class Distribution (Interactive)")
-    class_counts = df["class"].value_counts().reset_index()
-    class_counts.columns = ["class", "count"]
-    fig = px.bar(class_counts, x="class", y="count", text="count", title="Good vs Bad Credit")
-    fig.update_traces(textposition="outside")
-    st.plotly_chart(fig, use_container_width=True)
+    # target distribution
+    if "TARGET" in df.columns:
+        st.markdown("### Target Distribution (0 = repaid, 1 = default)")
+        fig = px.histogram(df, x="TARGET")
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Numeric Feature Explorer")
+    # numeric correlation heatmap (first 20 numeric cols to keep it light)
+    st.markdown("### Correlation Heatmap (numeric features)")
     num_cols = df.select_dtypes(include="number").columns.tolist()
-    num_col = st.selectbox("Pick a numeric column", num_cols, index=0)
+    num_subset = num_cols[:20]   # don't plot all, just a subset
+    corr = df[num_subset].corr()
+    fig_corr = px.imshow(corr, text_auto=True, aspect="auto")
+    st.plotly_chart(fig_corr, use_container_width=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        fig = px.histogram(df, x=num_col, color="class", barmode="overlay",
-                       marginal="rug", nbins=40, title=f"Histogram: {num_col}")
-    st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        fig = px.box(df, x="class", y=num_col, points="all", title=f"Boxplot by class: {num_col}")
-    st.plotly_chart(fig, use_container_width=True)
+    # some feature vs TARGET plots (only if columns exist)
+    st.markdown("### Key Features vs Default Probability")
 
-    st.subheader("Class Distribution")
-    fig, ax = plt.subplots()
-    sns.countplot(x="class", data=df, ax=ax, palette="viridis")
-    ax.set_title("Good vs Bad Credit")
-    st.pyplot(fig)
+    if {"AMT_CREDIT", "TARGET"} <= set(df.columns):
+        fig_credit = px.histogram(
+            df, x="AMT_CREDIT", color="TARGET", barmode="overlay",
+            nbins=50,
+            title="Credit Amount vs Target"
+        )
+        fig_credit.update_layout(xaxis_title="AMT_CREDIT", yaxis_title="Count")
+        st.plotly_chart(fig_credit, use_container_width=True)
 
-    st.subheader("Correlation Heatmap (numeric)")
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.heatmap(df.select_dtypes(include="number").corr(),
-                annot=True, cmap="coolwarm", linewidths=0.5, ax=ax)
-    ax.set_title("Feature Correlations")
-    st.pyplot(fig)
+    if {"AMT_INCOME_TOTAL", "TARGET"} <= set(df.columns):
+        fig_income = px.histogram(
+            df, x="AMT_INCOME_TOTAL", color="TARGET", barmode="overlay",
+            nbins=50,
+            title="Income vs Target"
+        )
+        fig_income.update_layout(xaxis_title="AMT_INCOME_TOTAL", yaxis_title="Count")
+        st.plotly_chart(fig_income, use_container_width=True)
 
-    st.subheader("Correlation Explorer (with target)")
-    method = st.selectbox("Correlation method", ["pearson", "spearman", "kendall"], index=0)
-    corr = df.select_dtypes(include="number").corr(method=method)
-    if "class" in df.columns:
-        st.info("Note: target is categorical; using a numeric proxy for quick ranking.")
-# quick numeric proxy: map class to 0/1 for ranking only
-    y_num = (df["class"] == "bad").astype(int)
-    corr_with_target = df.select_dtypes(include="number").assign(_y=y_num).corr(method=method)["_y"].drop("_y")
-    topN = st.slider("Show top N features by |correlation| with target", 3, min(15, len(corr_with_target)), 8)
-    series = corr_with_target.abs().sort_values(ascending=False).head(topN)
-    fig = px.bar(series, x=series.index, y=series.values,
-             labels={"x":"feature", "y":f"|corr| with target ({method})"},
-             title=f"Top {topN} Correlated Features")
-    st.plotly_chart(fig, use_container_width=True)
+    # ----- Model metrics from training -----
+    st.markdown("### Model Performance (Saved from Training Script)")
 
-    st.subheader("Categorical Breakdown by Class")
-    cat_cols = df.select_dtypes(include=["object","category"]).columns.tolist()
-    if cat_cols:
-        cat = st.selectbox("Pick a categorical column", cat_cols, index=0)
-    counts = df.groupby([cat, "class"]).size().reset_index(name="count")
-    fig = px.bar(counts, x=cat, y="count", color="class", barmode="stack",
-                 title=f"{cat}: distribution by class")
-    st.plotly_chart(fig, use_container_width=True)
+    metrics = meta.get("metrics", {})
+    if metrics:
+        metrics_df = pd.DataFrame(metrics).T  # models as rows
+        st.dataframe(metrics_df)
+
+        # simple bar chart of ROC AUC
+        if "roc_auc" in metrics_df.columns:
+            fig_auc = px.bar(
+                metrics_df.reset_index(),
+                x="index",
+                y="roc_auc",
+                title="ROC AUC by Model"
+            )
+            fig_auc.update_layout(xaxis_title="Model", yaxis_title="ROC AUC")
+            st.plotly_chart(fig_auc, use_container_width=True)
+
+        st.info(f"Best model (by ROC AUC): **{meta.get('best_model', 'unknown')}**")
+    else:
+        st.warning("No metric information found in metadata.")
 
 
 # --- Tab 3 ---
