@@ -497,66 +497,94 @@ Use this tab to **simulate a single loan application**.
 # ----------------------------
 
 with tab_batch:
-    st.subheader("Batch Prediction")
+    st.subheader("Batch Prediction on CSV")
 
-    try:
-        # load the small sample from the repo
-        sample_df = pd.read_csv(HOME_SAMPLE_PATH)
+    if home_df is None or home_result is None:
+        st.info("Home Credit sample data was not loaded, so batch prediction is disabled.")
+    else:
+        # 1. Choose which trained model to use for batch prediction
+        home_models = home_result["models"]
+        best_name = home_result.get("best_name", "Logistic Regression")
+        home_best_model = home_models[best_name]
 
-        # drop TARGET for scoring template (model predicts TARGET)
-        template_df = sample_df.drop(columns=["TARGET"], errors="ignore").head(50)
+        st.markdown(f"Using **{best_name}** model for batch prediction.")
 
-        template_csv = template_df.to_csv(index=False).encode("utf-8")
-
+        # 2. Offer a sample CSV for users to download
         st.markdown("#### Download Sample CSV")
-        st.caption("Use this as a template: keep the same column names and data types.")
+
+        # Use a small sample of the Home Credit data, dropping the TARGET column
+        sample_cols = home_result["feature_info"]["all_features"]
+        sample_df = home_df[sample_cols].head(200)  # first 200 rows
+        sample_csv = sample_df.to_csv(index=False)
 
         st.download_button(
-            label="📥 Download sample batch CSV",
-            data=template_csv,
-            file_name="home_credit_batch_template.csv",
+            label="Download sample_batch.csv",
+            data=sample_csv,
+            file_name="sample_batch.csv",
             mime="text/csv",
+            help="Download a sample file you can edit and upload below."
         )
-    except Exception as e:
-        st.info("Sample CSV template is not available on this server.")
 
-    st.markdown("---")
-    st.markdown("#### Upload CSV for Batch Scoring")
+        st.markdown("---")
+        st.markdown("#### Upload Batch File")
 
-    uploaded_file = st.file_uploader(
-        "Upload a CSV with the same columns as the template (no `TARGET` column needed).",
-        type="csv",
-    )
+        uploaded_file = st.file_uploader(
+            "Upload a CSV with the same columns as the training data (no TARGET needed).",
+            type=["csv"],
+            key="batch_uploader"
+        )
 
-    if uploaded_file is not None:
-        batch_df = pd.read_csv(uploaded_file)
+        if uploaded_file is not None:
+            try:
+                batch_df = pd.read_csv(uploaded_file)
+                st.write("Preview of uploaded data:")
+                st.dataframe(batch_df.head())
 
-        # expected feature columns (same as training, without TARGET)
-        expected_cols = [c for c in home_df.columns if c != "TARGET"]
+                # 3. Align columns with what the model expects
+                expected_cols = home_result["feature_info"]["all_features"]
 
-        missing = set(expected_cols) - set(batch_df.columns)
-        extra   = set(batch_df.columns) - set(expected_cols)
+                missing_in_upload = [c for c in expected_cols if c not in batch_df.columns]
+                extra_in_upload = [c for c in batch_df.columns if c not in expected_cols]
 
-        if missing:
-            st.error(f"These required columns are missing from your file: {missing}")
-        else:
-            # keep only the expected columns and in the correct order
-            batch_X = batch_df[expected_cols].copy()
+                if missing_in_upload:
+                    st.error(
+                        "Your file is missing these required columns:\n\n"
+                        + ", ".join(missing_in_upload)
+                    )
+                else:
+                    # keep only the expected columns, in correct order
+                    batch_X = batch_df[expected_cols].copy()
 
-            # use your chosen model (replace `best_model` if your variable is different)
-            probs = best_model.predict_proba(batch_X)[:, 1]
+                    # 4. Run predictions
+                    probs = home_best_model.predict_proba(batch_X)[:, 1]
+                    preds = (probs >= 0.5).astype(int)
 
-            result_df = batch_df.copy()
-            result_df["default_probability"] = probs
+                    out = batch_df.copy()
+                    out["default_probability"] = probs
+                    out["predicted_default"] = preds
 
-            st.markdown("#### Preview of Scored Data")
-            st.dataframe(result_df.head())
+                    st.markdown("#### Prediction Summary")
+                    st.write(
+                        f"Number of rows: **{len(out)}**  \n"
+                        f"Predicted defaults: **{int(out['predicted_default'].sum())}**"
+                    )
 
-            # allow user to download results
-            out_csv = result_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="📤 Download results as CSV",
-                data=out_csv,
-                file_name="batch_predictions_with_scores.csv",
-                mime="text/csv",
-            )
+                    st.dataframe(out.head())
+
+                    # 5. Allow user to download the results
+                    out_csv = out.to_csv(index=False)
+                    st.download_button(
+                        label="Download predictions as CSV",
+                        data=out_csv,
+                        file_name="batch_predictions.csv",
+                        mime="text/csv",
+                    )
+
+                    if extra_in_upload:
+                        st.info(
+                            "Note: The following columns were in your file but not used by the model:\n\n"
+                            + ", ".join(extra_in_upload)
+                        )
+
+            except Exception as e:
+                st.error(f"Could not process uploaded file: {e}")
