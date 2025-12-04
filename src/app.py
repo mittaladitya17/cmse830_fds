@@ -496,7 +496,7 @@ Use this tab to **simulate a single loan application**.
 # Tab 5: Batch Prediction
 # ----------------------------
 
-with tab5:
+with tab_batch:
     st.subheader("Batch Prediction")
 
     try:
