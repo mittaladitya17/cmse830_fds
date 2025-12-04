@@ -217,7 +217,7 @@ home_df = load_home_data()
 home_result = train_home_models(home_df) if home_df is not None else None
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Overview", "EDA (Home Credit)", "Model Metrics", "Single Prediction", "Batch Prediction"]
+    ["Overview", "EDA", "Model Metrics", "Single Prediction", "Batch Prediction"]
 )
 
 # ---------------------------------------------------------------------
@@ -233,7 +233,7 @@ with tab1:
 - Trains three models on the Home Credit data:
   - **Logistic Regression**
   - **Random Forest**
-  - **XGBoost** (if available in the environment)
+  - **XGBoost** 
 - Lets you:
   - Explore the Home Credit data interactively (EDA tab).
   - Compare model performance (Model Metrics tab).
@@ -241,18 +241,6 @@ with tab1:
   - Upload a CSV of Home Credit-style applicants and get risk scores (Batch Prediction tab).
         """
     )
-
-    if home_result is not None:
-        st.markdown("#### Current Best Model on Home Credit Sample")
-        best_name = home_result["best_name"]
-        best_row = home_result["metrics"].loc[best_name]
-        cols = st.columns(3)
-        cols[0].metric("Best Model", best_name)
-        cols[1].metric("ROC AUC", f"{best_row['roc_auc']:.3f}")
-        cols[2].metric("F1 score", f"{best_row['f1']:.3f}")
-    else:
-        st.warning("Home Credit sample or models not available yet.")
-
 
 # ---------------------------------------------------------------------
 # Tab 2 – EDA on Home Credit sample
