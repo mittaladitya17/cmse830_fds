@@ -290,7 +290,8 @@ with tab_eda:
             st.metric("Missing values", int(df.isna().sum().sum()))
 
         with st.expander("Show summary statistics"):
-            st.write(df.describe(include="all", datetime_is_numeric=True).T)
+            desc = df.describe(include="all")   
+            st.write(desc.T)
 
         # Identify numeric / categorical columns
         num_cols = df.select_dtypes(include="number").columns.tolist()
