@@ -242,11 +242,42 @@ with tab1:
         """
     )
 
+    st.markdown("### Datasets Overview")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**German Credit (credit-g.csv)**")
+        st.write(f"Shape: `{credit_df.shape[0]} rows × {credit_df.shape[1]} columns`")
+        st.dataframe(credit_df.head())
+
+    with col2:
+        if home_df is not None:
+            st.markdown("**Home Credit Sample (home_credit_sample.csv)**")
+            st.write(f"Shape: `{home_df.shape[0]} rows × {home_df.shape[1]} columns`")
+            st.dataframe(home_df.head())
+        else:
+            st.info(
+                "Home Credit sample not found. "
+                "Make sure `home_credit_sample.csv` is in the `data/` folder."
+            )
+
 # ---------------------------------------------------------------------
 # Tab 2 – EDA on Home Credit sample
 # ---------------------------------------------------------------------
 with tab2:
     st.subheader("Exploratory Data Analysis – Home Credit Sample")
+
+    dataset_choice = st.radio(
+        "Choose dataset to explore:",
+        ["German Credit", "Home Credit Sample"],
+        horizontal=True
+    )
+
+    if dataset_choice == "German Credit":
+        df = credit_df.copy()
+        target_col = "class"
+        st.caption("Target column: `class` (good / bad).")
 
     if home_df is None:
         st.error("Home Credit sample could not be loaded.")
