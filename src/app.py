@@ -499,7 +499,7 @@ Use this tab to **simulate a single loan application**.
 with tab_batch:
     st.subheader("Batch Prediction on CSV")
 
-    if home_df is None or home_result is None:
+    if home_df is None or home_models is None:
         st.info("Home Credit sample data was not loaded, so batch prediction is disabled.")
     else:
         # 1. Choose which trained model to use for batch prediction
