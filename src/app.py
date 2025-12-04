@@ -475,10 +475,6 @@ with tab_single:
     st.markdown(
         """
 Use this tab to **simulate a single loan application**.  
-
-The form below uses the same input schema as the trained German Credit pipeline.
-Values are typed as text for simplicity – the model will still run, but in a real
-production system you would use proper widgets (drop-downs, sliders, validation, etc.).
         """
     )
 
@@ -500,42 +496,67 @@ production system you would use proper widgets (drop-downs, sliders, validation,
 # Tab 5: Batch Prediction
 # ----------------------------
 
-with tab_batch:
-    st.subheader("Batch Prediction from CSV (German Credit)")
+with tab5:
+    st.subheader("Batch Prediction")
 
-    st.markdown(
-        """
-Upload a CSV file with the **same columns as the German Credit dataset** (except
-for the target `class` column). The app will run the saved pipeline on all rows
-and return the **default probability** for each record.
-        """
+    try:
+        # load the small sample from the repo
+        sample_df = pd.read_csv(HOME_SAMPLE_PATH)
+
+        # drop TARGET for scoring template (model predicts TARGET)
+        template_df = sample_df.drop(columns=["TARGET"], errors="ignore").head(50)
+
+        template_csv = template_df.to_csv(index=False).encode("utf-8")
+
+        st.markdown("#### Download Sample CSV")
+        st.caption("Use this as a template: keep the same column names and data types.")
+
+        st.download_button(
+            label="📥 Download sample batch CSV",
+            data=template_csv,
+            file_name="home_credit_batch_template.csv",
+            mime="text/csv",
+        )
+    except Exception as e:
+        st.info("Sample CSV template is not available on this server.")
+
+    st.markdown("---")
+    st.markdown("#### Upload CSV for Batch Scoring")
+
+    uploaded_file = st.file_uploader(
+        "Upload a CSV with the same columns as the template (no `TARGET` column needed).",
+        type="csv",
     )
 
-    uploaded = st.file_uploader("Upload CSV for scoring", type=["csv"])
+    if uploaded_file is not None:
+        batch_df = pd.read_csv(uploaded_file)
 
-    if uploaded is not None:
-        try:
-            batch_df = pd.read_csv(uploaded)
+        # expected feature columns (same as training, without TARGET)
+        expected_cols = [c for c in home_df.columns if c != "TARGET"]
 
-            st.write("Preview of uploaded data:")
-            st.dataframe(batch_df.head())
+        missing = set(expected_cols) - set(batch_df.columns)
+        extra   = set(batch_df.columns) - set(expected_cols)
 
-            prob = pipe.predict_proba(batch_df)[:, 1]
+        if missing:
+            st.error(f"These required columns are missing from your file: {missing}")
+        else:
+            # keep only the expected columns and in the correct order
+            batch_X = batch_df[expected_cols].copy()
+
+            # use your chosen model (replace `best_model` if your variable is different)
+            probs = best_model.predict_proba(batch_X)[:, 1]
+
             result_df = batch_df.copy()
-            result_df["default_probability"] = prob
+            result_df["default_probability"] = probs
 
-            st.markdown("#### Scored Results (first 10 rows)")
-            st.dataframe(result_df.head(10))
+            st.markdown("#### Preview of Scored Data")
+            st.dataframe(result_df.head())
 
-            csv_bytes = result_df.to_csv(index=False).encode("utf-8")
+            # allow user to download results
+            out_csv = result_df.to_csv(index=False).encode("utf-8")
             st.download_button(
-                label="Download full results as CSV",
-                data=csv_bytes,
-                file_name="scored_applicants.csv",
-                mime="text/csv"
+                label="📤 Download results as CSV",
+                data=out_csv,
+                file_name="batch_predictions_with_scores.csv",
+                mime="text/csv",
             )
-
-        except Exception as e:
-            st.error(f"Error while scoring batch file: {e}")
-    else:
-        st.info("Upload a CSV file to run batch scoring.")
