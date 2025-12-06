@@ -69,26 +69,25 @@ We train three models on the Home Credit sample dataset:
    - Handles irregular patterns & interactions effectively
 
 ### Model Evaluation
+- Each model is compared on a 25% hold-out test set using:
+  - Accuracy
+  - Precision
+  - Recall
+  - F1-score
+  - ROC AUC (primary metric)
 
-Each model is compared on a 25% hold-out test set using:
- - Accuracy
- - Precision
- - Recall
- - F1-score
- - ROC AUC (primary metric)
+- The dashboard shows:
+  - Interactive model comparison table
+  - Confusion matrix visualization
+  - Full classification report
+  - Automatic selection of best model
+  - Single Applicant Scoring
 
-The dashboard shows:
- - Interactive model comparison table
- - Confusion matrix visualization
- - Full classification report
- - Automatic selection of best model
- - Single Applicant Scoring
-
-Using the German Credit model:
- - User enters applicant information
- - Missing features are auto-filled with dataset medians/modes
- - Outputs predicted default probability
- - Provides interpretation guidance
+- Using the German Credit model:
+  - User enters applicant information
+  - Missing features are auto-filled with dataset medians/modes
+  - Outputs predicted default probability
+  - Provides interpretation guidance
 
 ### Batch Scoring
  - Upload a CSV file containing multiple customers and receive:
