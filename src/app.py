@@ -735,15 +735,6 @@ with tabs[4]:
             key="batch_template_main",
         )
 
-        # Also make it available from the sidebar
-        st.sidebar.markdown("### Batch Scoring Template")
-        st.sidebar.download_button(
-            label="Download batch CSV template",
-            data=template_csv_bytes,
-            file_name="home_credit_batch_template.csv",
-            mime="text/csv",
-            key="batch_template_sidebar",
-        )
 
         # --- File uploader for completed batch file ---
         uploaded_batch = st.file_uploader(
