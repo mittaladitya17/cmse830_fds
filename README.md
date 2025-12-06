@@ -1,77 +1,190 @@
-# Finance Risk Dashboard – Credit Scoring & Risk Prediction App
+💳 Credit Risk Scoring Dashboard
+Machine Learning Application for Predicting Loan Default Risk
+📌 Overview
 
-## Project Overview
-This project is an interactive Streamlit web application that demonstrates how data science and machine learning can be used to predict credit risk for financial institutions. It simulates a real-world scenario where banks or lending companies must decide whether to approve or reject loan applications based on applicant data.
+This project is an interactive Streamlit web application designed to simulate a real-world credit risk assessment system, similar to those used by banks, fintech companies, and lending institutions.
 
-The dashboard allows users to:  
-    -Explore and understand the dataset through interactive EDA (Exploratory Data Analysis).  
-    -Upload CSV files to perform batch risk scoring for multiple customers.    
-    -Enter customer details manually for a single prediction with risk probability.    
-    -Understand key model metrics like accuracy, precision, recall, and ROC-AUC.    
-    -This project is ongoing and will evolve into a full end-to-end credit risk scoring solution.
+Users can explore data, compare machine learning models, run predictions for a single applicant, and upload full CSV files to score many applicants at once.
 
-## Project Goals:  
+🎯 Project Objectives
+✔ Build an end-to-end ML pipeline for credit default prediction
+✔ Compare multiple classification models
+✔ Provide rich, interactive Exploratory Data Analysis (EDA)
+✔ Allow both single and batch risk scoring
+✔ Create an intuitive dashboard for stakeholders
+📚 Datasets Used
+1. German Credit Dataset (credit-g.csv)
 
-- Build an end-to-end ML pipeline for credit risk classification.  
-- Visualize and analyze financial data interactively.  
-- Handle class imbalance (common in credit datasets) effectively.  
-- Allow users to experiment and explore predictions in multiple ways.
+Used for:
 
-### Dataset
+Single applicant scoring
 
-We use the German Credit dataset (from OpenML), a widely used benchmark in financial ML tasks.    
-    - Rows: 1000 applicants.   
-    - Target: class – whether the applicant has good or bad credit risk.   
-    - Features include:  
-        - Personal info (age, employment status, etc.).   
-        - Loan details (amount, duration, purpose).    
-        - Financial history (savings, credit history, checking account balance)
+Batch scoring demo
 
-### Workflow
-1. Initial Data Analysis (IDA).
-    - Loaded and inspected the dataset (.info(), .describe() etc.). 
-    - Checked for missing values and data types.  
-    - Explored class distribution to understand imbalance.
+Simple baseline risk model
 
-2. Exploratory Data Analysis (EDA):  
-    - Interactive bar charts, heatmaps, pairplots, and boxplots.  
-    - Feature-level distribution and correlation with the target variable.  
-    - Bivariate scatter plots and category-based breakdowns.
+Description:
 
-3. Preprocessing & Modeling:  
-    - Encoded categorical variables with OneHotEncoder.  
-    - Scaled numeric variables with StandardScaler.  
-    - Addressed class imbalance using class_weight='balanced' in logistic regression.  
-    - Built a modular Pipeline for preprocessing + training.
+~1000 applicants
 
-4. Evaluation: Evaluated model performance using metrics:  
-    - Accuracy. 
-    - Precision. 
-    - Recall.   
-    - F1-score. 
-    - ROC-AUC
+Well-structured categorical + numeric features
 
-### Feature	Description
+Binary target indicating good/bad credit risk
 
-- EDA Dashboard:	Explore the dataset interactively: class distribution, correlations, feature insights.  
-- Batch Prediction:	Upload a CSV file of customers and get predicted risk + probability.  
-- Single Prediction:	Input customer details manually and get an instant risk score.  
-- Model Metrics:	See how well the ML model performs with precision, recall, F1, and AUC.
+2. Home Credit Sample Dataset (home_credit_sample.csv)
 
-## Tech Stack
-- Python – Core language. 
-- Streamlit – Dashboard & Web App. 
-- Scikit-learn – Data preprocessing and model building. 
-- Pandas / NumPy – Data manipulation. 
-- Matplotlib / Seaborn / Plotly – Data visualization. 
-- Joblib – Model saving/loading
+A subset extracted from the massive Kaggle Home Credit Default Risk dataset.
+Used for:
 
-## Future Plans 
+Full EDA
 
-- [ ] Add advanced visualizations (SHAP, feature importance). 
-- [ ] Deploy app on Streamlit Cloud or HuggingFace Spaces. 
-- [ ] Integrate multiple models (Random Forest, XGBoost). 
-- [ ] Add interpretability dashboard
+Multi-model training & comparison
 
-## Project Status
-This is the midterm version (~50% complete). Upcoming work includes deeper feature engineering, advanced visualization, and deployment.
+Realistic credit-risk modeling
+
+Why this dataset?
+
+Higher dimensionality & complexity
+
+Non-linear patterns
+
+Missing values, socioeconomic variables, loan behavior signals
+
+Mimics real financial industry data
+
+Target variable:
+
+TARGET = 1 → Default
+
+TARGET = 0 → Repaid
+
+🛠 Workflow Summary
+1. Initial Data Analysis (IDA)
+
+Inspect structure, datatypes, shapes
+
+Handle missing values & anomalies
+
+Remove ID columns (SK_ID_CURR, etc.)
+
+Explore balance of target variable
+
+2. Exploratory Data Analysis (EDA)
+
+Interactive Streamlit visualizations including:
+
+🔹 Target distribution
+🔹 Univariate feature distributions
+🔹 Bivariate feature vs target relationships
+🔹 Correlation heatmaps
+🔹 Dynamic histogram & boxplot visualizations
+
+Users can interactively choose numeric features and compare them across default outcomes.
+
+🤖 Machine Learning Models
+
+We train three models on the Home Credit sample dataset:
+
+1️⃣ Logistic Regression
+
+Fast, interpretable baseline
+
+Handles class imbalance (class_weight="balanced")
+
+2️⃣ Random Forest Classifier
+
+Captures non-linear relationships
+
+Handles missingness and categorical expansion well
+
+Robust and high-performing on tabular data
+
+3️⃣ XGBoost (if available)
+
+Powerful gradient boosting model
+
+Often among top Kaggle competition solutions
+
+Handles irregular patterns & interactions effectively
+
+📈 Model Evaluation
+
+Each model is compared on a 25% hold-out test set using:
+
+Accuracy
+
+Precision
+
+Recall
+
+F1-score
+
+ROC AUC (primary metric)
+
+The dashboard shows:
+
+✔ Interactive model comparison table
+✔ Confusion matrix visualization
+✔ Full classification report
+✔ Automatic selection of best model
+👤 Single Applicant Scoring
+
+Using the German Credit model:
+
+User enters applicant information
+
+Missing features are auto-filled with dataset medians/modes
+
+Outputs predicted default probability
+
+Provides interpretation guidance
+
+📦 Batch Scoring
+
+Upload a CSV file containing multiple customers and receive:
+
+A full scored dataset
+
+Default probability for every applicant
+
+Downloadable results file
+
+A pre-formatted template CSV is provided in the app.
+
+🧰 Tech Stack
+Component	Technology
+Web App	Streamlit
+ML Models	scikit-learn, XGBoost
+Data Processing	Pandas, NumPy
+Visualization	Plotly, Matplotlib
+Pipeline Caching	Streamlit cache
+Deployment	Streamlit Cloud
+🔮 Future Enhancements
+
+ Add SHAP-based model explainability
+
+ Add feature importance dashboards
+
+ Deploy enhanced version online
+
+ Improve synthetic feature generation
+
+ Add hyperparameter tuning (RandomizedSearchCV/GridSearchCV)
+
+ Add scorecard-like risk banding
+
+📌 Current Status
+
+This is the final, full version of the CMSE 830 project, incorporating:
+
+A richer dataset (Home Credit sample)
+
+Multiple ML models
+
+Full-featured Streamlit application
+
+Interactive EDA
+
+Batch & single scoring
+
+Well-documented pipeline
