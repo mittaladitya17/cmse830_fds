@@ -413,16 +413,6 @@ For **German Credit**, I reuse the trained logistic regression pipeline from the
         num_desc = home_df.select_dtypes(include="number").describe().T
         st.dataframe(num_desc.round(2), use_container_width=True)
 
-        st.markdown(
-            """
-**Target definition (`TARGET`):**  
-
-- `0` – loan was **repaid** on time (non-default)  
-- `1` – loan went into **default / serious delinquency**  
-
-All models in this app are trained to predict this target.
-"""
-        )
 
 # ------------------------------------------------------------------------------
 #  TAB 2 – EXPLORATORY ANALYSIS
