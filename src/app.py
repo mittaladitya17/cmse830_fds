@@ -292,9 +292,6 @@ else:
 # ------------------------------------------------------------------------------
 
 st.title("💳 Credit Risk Scoring Dashboard")
-st.caption(
-    
-)
 
 tabs = st.tabs(
     [
