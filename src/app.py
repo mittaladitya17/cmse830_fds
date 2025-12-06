@@ -293,7 +293,7 @@ else:
 
 st.title("💳 Credit Risk Scoring Dashboard")
 st.caption(
-    "CMSE 830 – Foundations of Data Science • Final Project · Home Credit Default Risk (Sample)"
+    
 )
 
 tabs = st.tabs(
@@ -310,7 +310,7 @@ tabs = st.tabs(
 #  TAB 1 – PROJECT OVERVIEW
 # ------------------------------------------------------------------------------
 
-with tab1:
+with tab[0]:
     st.header("Project Overview")
 
     st.markdown(
