@@ -11,7 +11,7 @@ import seaborn as sns
 import plotly.express as px
 
 import joblib
-
+from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
@@ -98,135 +98,141 @@ def load_home_credit_sample():
 # --------------------------------------------------------------------
 # TRAIN HOME CREDIT MODELS (LOGREG + RF + XGB)
 # --------------------------------------------------------------------
-@st.cache_resource(show_spinner=True)
+@st.cache_resource(show_spinner=False)
 def train_home_models(df: pd.DataFrame):
     """
-    Train three models on the Home Credit sample:
+    Train 3 models on the Home Credit sample dataset:
     - Logistic Regression
     - Random Forest
-    - XGBoost (if available)
+    - XGBoost
 
-    Returns a dictionary with:
-        models      : dict of fitted pipelines
-        metrics_df  : DataFrame with metrics per model
-        best_name   : name of best model (by ROC AUC)
-        best_model  : fitted pipeline
-        feature_cols: list of original feature columns used
-        target_col  : name of target
-        X_test, y_test: hold-out set for visualization
+    Returns metrics and the best model + preprocessor so we can reuse them
+    in the app (single prediction, batch prediction, model metrics tab).
     """
-
-    # Ensure target exists
+    # 1. Target + features
     if "TARGET" not in df.columns:
-        st.warning("No TARGET column in Home Credit sample; cannot train models.")
-        return None
-
-    # Basic clean-up: drop rows with missing TARGET
-    df = df.copy()
-    df = df.dropna(subset=["TARGET"])
-
-    # Use only a subset of rows for speed on Streamlit Cloud
-    # (still large enough to be realistic)
-    max_rows = 10000
-    if len(df) > max_rows:
-        df = df.sample(max_rows, random_state=42)
+        return None  # we can't train without the target
 
     target_col = "TARGET"
-    feature_cols = [c for c in df.columns if c != target_col]
-
-    X = df[feature_cols]
     y = df[target_col].astype(int)
+    X = df.drop(columns=[target_col])
 
-    # Split
+    # 2. Identify numeric and categorical columns
+    num_cols = X.select_dtypes(include=["number"]).columns.tolist()
+    cat_cols = X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+
+    # 3. Build preprocessors WITH IMPUTATION  ← this is the key fix
+
+    # numeric: median impute -> scale
+    num_tf = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    # categorical: most_frequent impute -> one-hot
+    cat_tf = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", num_tf, num_cols),
+            ("cat", cat_tf, cat_cols),
+        ]
+    )
+
+    # 4. Train / test split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.25, random_state=42, stratify=y
     )
 
-    # Identify column types
-    cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
-    num_cols = X.select_dtypes(include=["number", "bool"]).columns.tolist()
-
-    pre = ColumnTransformer(
-        transformers=[
-            ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
-            ("num", StandardScaler(), num_cols),
-        ],
-        remainder="drop",
-    )
-
-    models = {}
-
-    # Logistic Regression
-    lr = LogisticRegression(
-        max_iter=1000,
-        class_weight="balanced",
-        n_jobs=None,
-    )
-    pipe_lr = Pipeline([("pre", pre), ("clf", lr)])
-    pipe_lr.fit(X_train, y_train)
-    models["Logistic Regression"] = pipe_lr
-
-    # Random Forest
-    rf = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=None,
-        n_jobs=-1,
-        class_weight="balanced_subsample",
-        random_state=42,
-    )
-    pipe_rf = Pipeline([("pre", pre), ("clf", rf)])
-    pipe_rf.fit(X_train, y_train)
-    models["Random Forest"] = pipe_rf
-
-    # XGBoost (optional)
-    if XGB_AVAILABLE:
-        xgb = XGBClassifier(
+    # 5. Define models
+    models = {
+        "Logistic Regression": LogisticRegression(
+            max_iter=1000, class_weight="balanced"
+        ),
+        "Random Forest": RandomForestClassifier(
+            n_estimators=200, max_depth=None, n_jobs=-1, class_weight="balanced"
+        ),
+        "XGBoost": XGBClassifier(
             n_estimators=300,
             learning_rate=0.05,
             max_depth=4,
             subsample=0.8,
             colsample_bytree=0.8,
+            objective="binary:logistic",
             eval_metric="logloss",
-            random_state=42,
             n_jobs=-1,
+        ),
+    }
+
+    results = {}
+    best_auc = -1.0
+    best_name = None
+    best_pipe = None
+
+    for name, clf in models.items():
+        pipe = Pipeline(
+            steps=[
+                ("pre", preprocessor),
+                ("clf", clf),
+            ]
         )
-        pipe_xgb = Pipeline([("pre", pre), ("clf", xgb)])
-        pipe_xgb.fit(X_train, y_train)
-        models["XGBoost"] = pipe_xgb
 
-    # Compute metrics
-    rows = []
-    for name, model in models.items():
-        prob = model.predict_proba(X_test)[:, 1]
-        pred = (prob >= 0.5).astype(int)
+        pipe.fit(X_train, y_train)
 
-        rows.append(
+        # Probabilities + metrics
+        prob_test = pipe.predict_proba(X_test)[:, 1]
+        pred_test = (prob_test >= 0.5).astype(int)
+
+        auc = roc_auc_score(y_test, prob_test)
+        acc = accuracy_score(y_test, pred_test)
+        prec = precision_score(y_test, pred_test, zero_division=0)
+        rec = recall_score(y_test, pred_test, zero_division=0)
+        f1 = f1_score(y_test, pred_test, zero_division=0)
+
+        results[name] = {
+            "pipeline": pipe,
+            "auc": auc,
+            "accuracy": acc,
+            "precision": prec,
+            "recall": rec,
+            "f1": f1,
+        }
+
+        if auc > best_auc:
+            best_auc = auc
+            best_name = name
+            best_pipe = pipe
+
+    # 6. Pack everything for the UI
+    summary_df = pd.DataFrame(
+        [
             {
                 "Model": name,
-                "Accuracy": accuracy_score(y_test, pred),
-                "Precision": precision_score(y_test, pred, zero_division=0),
-                "Recall": recall_score(y_test, pred, zero_division=0),
-                "F1": f1_score(y_test, pred, zero_division=0),
-                "ROC AUC": roc_auc_score(y_test, prob),
+                "ROC AUC": res["auc"],
+                "Accuracy": res["accuracy"],
+                "Precision": res["precision"],
+                "Recall": res["recall"],
+                "F1": res["f1"],
             }
-        )
+            for name, res in results.items()
+        ]
+    ).sort_values("ROC AUC", ascending=False)
 
-    metrics_df = pd.DataFrame(rows).set_index("Model").sort_values("ROC AUC", ascending=False)
-    best_name = metrics_df["ROC AUC"].idxmax()
-    best_model = models[best_name]
-
-    result = {
-        "models": models,
-        "metrics_df": metrics_df,
+    return {
+        "results": results,
+        "summary": summary_df,
         "best_name": best_name,
-        "best_model": best_model,
-        "feature_cols": feature_cols,
+        "best_pipeline": best_pipe,
         "target_col": target_col,
-        "X_test": X_test,
-        "y_test": y_test,
+        "feature_cols": num_cols + cat_cols,
     }
-    return result
-
 
 # --------------------------------------------------------------------
 # MAIN APP
