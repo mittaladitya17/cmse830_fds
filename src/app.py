@@ -703,73 +703,103 @@ For all other features, the app will automatically use typical/median values fro
 #  TAB 5 – BATCH SCORING
 # ------------------------------------------------------------------------------
     
+# ================================
+# TAB 5 – BATCH SCORING
+# ================================
 with tabs[4]:
     st.subheader("Batch Scoring (Upload Multiple Applicants)")
 
-    st.markdown(
-        """
-        1. Download the CSV template from the sidebar or from here.\n
-        2. Fill in one row per applicant.\n
-        3. Upload the completed file below to get default probabilities for all applicants.
-        """
-    )
+    if (home_df is None) or (home_result is None):
+        st.warning(
+            "Home Credit sample or trained models are not available, "
+            "so batch scoring is disabled."
+        )
+    else:
+        # --- Create a template CSV from the Home Credit sample ---
+        # Use the same feature set the models were trained on
+        if "X_train" in home_result:
+            feature_cols = home_result["X_train"].columns.tolist()
+        else:
+            # Fallback: all columns except the target
+            feature_cols = [c for c in home_df.columns if c != target_col]
 
-    uploaded_batch = st.file_uploader("Upload completed batch CSV", type="csv")
+        # Take first 5 rows as an example template
+        template_df = home_df[feature_cols].head(5)
+        template_csv_bytes = template_df.to_csv(index=False).encode("utf-8")
 
-    if uploaded_batch is not None:
-        try:
-            batch_df = pd.read_csv(uploaded_batch)
+        st.markdown(
+            """
+1. **Download** the CSV template (from the sidebar or the button below).  
+2. **Fill in one row per applicant** (you can keep or delete the example rows).  
+3. **Upload** the completed CSV to get default probabilities for all applicants.
+"""
+        )
 
-            # Show basic info
-            st.write(f"✅ Loaded file with **{batch_df.shape[0]} rows** and **{batch_df.shape[1]} columns**.")
-            st.dataframe(batch_df.head())
+        # Download button inside the main Batch tab
+        st.download_button(
+            label="⬇️ Download batch template (Home Credit features)",
+            data=template_csv_bytes,
+            file_name="batch_template_home_credit.csv",
+            mime="text/csv",
+            key="batch_template_main",
+        )
 
-            # 👉 IMPORTANT: guard against empty file
-            if batch_df.shape[0] == 0:
-                st.error(
-                    "Your file has **no data rows**. "
-                    "Please add at least one applicant row to the CSV before uploading."
-                )
-                st.stop()
+        # Also make it available from the sidebar
+        st.sidebar.markdown("### Batch Scoring Template")
+        st.sidebar.download_button(
+            label="Download batch CSV template",
+            data=template_csv_bytes,
+            file_name="batch_template_home_credit.csv",
+            mime="text/csv",
+            key="batch_template_sidebar",
+        )
 
-            # If you stored feature columns from training:
-            # feature_cols = home_result["feature_cols"]
-            # batch_X = batch_df[feature_cols]
+        # --- File uploader for completed batch file ---
+        uploaded_batch = st.file_uploader(
+            "Upload completed batch CSV", type="csv", key="batch_uploader"
+        )
 
-            # If the model expects the same columns as home_df without the target:
-            feature_cols = [c for c in home_df.columns if c != "TARGET"]
-            missing_in_batch = set(feature_cols) - set(batch_df.columns)
-            if missing_in_batch:
-                st.error(
-                    f"The uploaded file is missing these required columns: {missing_in_batch}. "
-                    "Please use the provided template."
-                )
-                st.stop()
+        if uploaded_batch is not None:
+            try:
+                batch_df = pd.read_csv(uploaded_batch)
 
-            batch_X = batch_df[feature_cols]
+                # Check for missing required columns
+                missing_cols = [c for c in feature_cols if c not in batch_df.columns]
+                if missing_cols:
+                    st.error(
+                        "Your file is missing the following required columns:\n\n"
+                        + ", ".join(missing_cols)
+                    )
+                elif batch_df.shape[0] == 0:
+                    # Only headers, no rows
+                    st.warning(
+                        "The uploaded file has column headers but **no rows**.\n\n"
+                        "Please add at least one applicant (one row) before uploading."
+                    )
+                else:
+                    # Use the best model from Model Performance
+                    summary = home_result["summary"]
+                    best_model_name = summary["roc_auc"].idxmax()
+                    best_model = home_result["models"][best_model_name]
 
-            # Choose which model to use for batch scoring
-            model_name = st.selectbox(
-                "Choose model for batch scoring",
-                list(home_result["models"].keys()),
-            )
-            model = home_result["models"][model_name]
+                    X_batch = batch_df[feature_cols]
+                    probs = best_model.predict_proba(X_batch)[:, 1]
 
-            probs = model.predict_proba(batch_X)[:, 1]
-            output = batch_df.copy()
-            output["default_probability"] = probs
+                    result_df = batch_df.copy()
+                    result_df["default_probability"] = probs
 
-            st.markdown("### Scored Results (top 10 rows)")
-            st.dataframe(output.head(10))
+                    st.markdown("#### Preview of scored applicants")
+                    st.dataframe(result_df.head())
 
-            # Download button for results
-            csv_bytes = output.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="Download Scored CSV",
-                data=csv_bytes,
-                file_name="batch_scored_results.csv",
-                mime="text/csv",
-            )
+                    # Allow user to download full scored file
+                    scored_csv_bytes = result_df.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        label="⬇️ Download scored CSV (with default probabilities)",
+                        data=scored_csv_bytes,
+                        file_name="batch_scored_home_credit.csv",
+                        mime="text/csv",
+                        key="batch_scored_download",
+                    )
 
-        except Exception as e:
-            st.error(f"Something went wrong while scoring your file:\n\n`{e}`")
+            except Exception as e:
+                st.error(f"Something went wrong while scoring your file: {e}")
