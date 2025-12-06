@@ -306,7 +306,6 @@ tabs = st.tabs(
 # ------------------------------------------------------------------------------
 #  TAB 1 – PROJECT OVERVIEW
 # ------------------------------------------------------------------------------
-
 with tabs[0]:
     st.subheader("Project Overview")
 
@@ -325,7 +324,66 @@ This app simulates a **credit risk scoring system**:
 
 ---
 
+###  Datasets Used
 
+**1. German Credit (credit-g.csv)**  
+Small, classic dataset (1000 rows) with mixed categorical and numeric features.  
+I use this dataset for:
+
+- A **clean, interpretable logistic regression model**
+- Interactive **single applicant** prediction
+- **Batch** CSV scoring demo
+
+**2. Home Credit Sample (application_train_sample.csv)**  
+A cut-down version of the large Kaggle Home Credit dataset.  
+It has:
+
+- Many more features (dozens of socioeconomic + financial variables)
+- A binary target: `TARGET` (1 = default, 0 = repaid)
+- Missing values, skewed distributions, correlations — perfect for **EDA and model comparison**
+
+---
+
+###  Pipeline & Modeling Summary
+
+For **Home Credit sample**, the ML pipeline does:
+
+- **Initial Data Analysis (IDA)**  
+  - Check structure: column types, target balance, missing values  
+  - Drop obvious IDs (e.g., `SK_ID_CURR`) that don’t help prediction
+
+- **Preprocessing**  
+  - Numeric features: median imputation + standardization  
+  - Categorical features: most frequent imputation + one-hot encoding  
+
+- **Models Compared**
+  - Logistic Regression (baseline linear model with class balancing)
+  - Random Forest (non-linear ensemble, handles interactions)
+  - XGBoost (if available in environment – strong gradient boosting model)
+
+For **German Credit**, I reuse the trained logistic regression pipeline from the midterm:
+
+- Encodes categorical variables using `OneHotEncoder`
+- Scales numerical variables
+- Outputs a **probability of default** for each applicant
+
+---
+
+###  App Navigation
+
+- ** EDA & Data Understanding**  
+  Explore distributions, correlations, and missing data for both datasets.
+
+- ** Models & Metrics (Home Credit)**  
+  Compare Logistic Regression, Random Forest, and XGBoost on the Home Credit sample.  
+  Inspect confusion matrices and full classification reports.
+
+- ** Single Applicant (German Credit)**  
+  Manually enter features and get a predicted default probability.
+
+- ** Batch Scoring (German Credit)**  
+  Upload a CSV file and get risk scores for many applicants at once.
+"""
     )
 
 
@@ -358,66 +416,6 @@ This app simulates a **credit risk scoring system**:
 
         st.markdown(
             """
-        ### Datasets Used
-
-**1. German Credit (credit-g.csv)**  
-Small, classic dataset (1000 rows) with mixed categorical and numeric features.  
-I use this dataset for:
-
-- A **clean, interpretable logistic regression model**
-- Interactive **single applicant** prediction
-- **Batch** CSV scoring demo
-
-**2. Home Credit Sample (application_train_sample.csv)**  
-A cut-down version of the large Kaggle Home Credit dataset.  
-It has:
-
-- Many more features (dozens of socioeconomic + financial variables)
-- A binary target: `TARGET` (1 = default, 0 = repaid)
-- Missing values, skewed distributions, correlations — perfect for **EDA and model comparison**
-
----
-
-### 🔧 Pipeline & Modeling Summary
-
-For **Home Credit sample**, the ML pipeline does:
-
-- **Initial Data Analysis (IDA)**  
-  - Check structure: column types, target balance, missing values  
-  - Drop obvious IDs (e.g., `SK_ID_CURR`) that don’t help prediction
-
-- **Preprocessing**  
-  - Numeric features: median imputation + standardization  
-  - Categorical features: most frequent imputation + one-hot encoding  
-
-- **Models Compared**
-  - Logistic Regression (baseline linear model with class balancing)
-  - Random Forest (non-linear ensemble, handles interactions)
-  - XGBoost (if available in environment – strong gradient boosting model)
-
-For **German Credit**, I reuse the trained logistic regression pipeline from the midterm:
-
-- Encodes categorical variables using `OneHotEncoder`
-- Scales numerical variables
-- Outputs a **probability of default** for each applicant
-
----
-
-### App Navigation
-
-- ** EDA & Data Understanding**  
-  Explore distributions, correlations, and missing data for both datasets.
-
-- ** Models & Metrics (Home Credit)**  
-  Compare Logistic Regression, Random Forest, and XGBoost on the Home Credit sample.  
-  Inspect confusion matrices and full classification reports.
-
-- ** Single Applicant (German Credit)**  
-  Manually enter features and get a predicted default probability.
-
-- ** Batch Scoring (German Credit)**  
-  Upload a CSV file and get risk scores for many applicants at once.
-"""
 **Target definition (`TARGET`):**  
 
 - `0` – loan was **repaid** on time (non-default)  
@@ -426,8 +424,6 @@ For **German Credit**, I reuse the trained logistic regression pipeline from the
 All models in this app are trained to predict this target.
 """
         )
-
-
 
 # ------------------------------------------------------------------------------
 #  TAB 2 – EXPLORATORY ANALYSIS
