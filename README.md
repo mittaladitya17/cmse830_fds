@@ -5,11 +5,11 @@ Machine Learning Application for Predicting Loan Default Risk
 - Users can explore data, compare machine learning models, run predictions for a single applicant, and upload full CSV files to score many applicants at once.
 
 ## Project Objectives
-✔ Build an end-to-end ML pipeline for credit default prediction
-✔ Compare multiple classification models
-✔ Provide rich, interactive Exploratory Data Analysis (EDA)
-✔ Allow both single and batch risk scoring
-✔ Create an intuitive dashboard for stakeholders
+- Build an end-to-end ML pipeline for credit default prediction
+- Compare multiple classification models
+- Provide rich, interactive Exploratory Data Analysis (EDA)
+- Allow both single and batch risk scoring
+- Create an intuitive dashboard for stakeholders
 
 ### Datasets Used
 1. German Credit Dataset (credit-g.csv)
