@@ -291,15 +291,15 @@ else:
 #  UI LAYOUT
 # ------------------------------------------------------------------------------
 
-st.title("💳 Credit Risk Scoring Dashboard")
+st.title("Credit Risk Scoring Dashboard")
 
 tabs = st.tabs(
     [
-        "1️⃣ Project Overview",
-        "2️⃣ Exploratory Analysis",
-        "3️⃣ Model Performance",
-        "4️⃣ Single Applicant Scoring",
-        "5️⃣ Batch Scoring",
+        "Project Overview",
+        "Exploratory Analysis",
+        "Model Performance",
+        "Single Applicant Scoring",
+        "Batch Scoring",
     ]
 )
 
@@ -358,7 +358,7 @@ This app simulates a **credit risk scoring system**:
 
         st.markdown(
             """
-        ### 📂 Datasets Used
+        ### Datasets Used
 
 **1. German Credit (credit-g.csv)**  
 Small, classic dataset (1000 rows) with mixed categorical and numeric features.  
@@ -403,19 +403,19 @@ For **German Credit**, I reuse the trained logistic regression pipeline from the
 
 ---
 
-### 🧭 App Navigation
+### App Navigation
 
-- **📊 EDA & Data Understanding**  
+- ** EDA & Data Understanding**  
   Explore distributions, correlations, and missing data for both datasets.
 
-- **🤖 Models & Metrics (Home Credit)**  
+- ** Models & Metrics (Home Credit)**  
   Compare Logistic Regression, Random Forest, and XGBoost on the Home Credit sample.  
   Inspect confusion matrices and full classification reports.
 
-- **🧍 Single Applicant (German Credit)**  
+- ** Single Applicant (German Credit)**  
   Manually enter features and get a predicted default probability.
 
-- **📂 Batch Scoring (German Credit)**  
+- ** Batch Scoring (German Credit)**  
   Upload a CSV file and get risk scores for many applicants at once.
 """
 **Target definition (`TARGET`):**  
