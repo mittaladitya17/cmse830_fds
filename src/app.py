@@ -703,7 +703,7 @@ For all other features, the app will automatically use typical/median values fro
 #  TAB 5 – BATCH SCORING
 # ------------------------------------------------------------------------------
     
-with tab[4]:
+with tabs[4]:
     st.subheader("Batch Scoring (Upload Multiple Applicants)")
 
     st.markdown(
