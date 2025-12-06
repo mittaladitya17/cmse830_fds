@@ -325,7 +325,40 @@ This app simulates a **credit risk scoring system**:
 
 ---
 
-### 📂 Datasets Used
+
+    )
+
+
+    st.markdown("---")
+
+    st.markdown("### Dataset Summary (Home Credit Sample)")
+    if home_df is None:
+        st.error("Dataset could not be loaded. Check that `data/home_credit_sample.csv` exists.")
+        if train_err:
+            st.code(train_err)
+    else:
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("Rows (sample)", f"{home_df.shape[0]:,}")
+        with col_b:
+            st.metric("Features", f"{home_df.shape[1] - 1:,}")  # minus TARGET
+        with col_c:
+            if "TARGET" in home_df.columns:
+                default_rate = home_df["TARGET"].mean()
+                st.metric("Default Rate (sample)", f"{default_rate:.1%}")
+            else:
+                st.metric("Default Rate", "N/A")
+
+        st.markdown("#### Example Rows")
+        st.dataframe(home_df.head(), use_container_width=True)
+
+        st.markdown("#### Basic Statistics (Numeric Features)")
+        num_desc = home_df.select_dtypes(include="number").describe().T
+        st.dataframe(num_desc.round(2), use_container_width=True)
+
+        st.markdown(
+            """
+        ### 📂 Datasets Used
 
 **1. German Credit (credit-g.csv)**  
 Small, classic dataset (1000 rows) with mixed categorical and numeric features.  
@@ -385,38 +418,6 @@ For **German Credit**, I reuse the trained logistic regression pipeline from the
 - **📂 Batch Scoring (German Credit)**  
   Upload a CSV file and get risk scores for many applicants at once.
 """
-    )
-
-
-    st.markdown("---")
-
-    st.markdown("### Dataset Summary (Home Credit Sample)")
-    if home_df is None:
-        st.error("Dataset could not be loaded. Check that `data/home_credit_sample.csv` exists.")
-        if train_err:
-            st.code(train_err)
-    else:
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            st.metric("Rows (sample)", f"{home_df.shape[0]:,}")
-        with col_b:
-            st.metric("Features", f"{home_df.shape[1] - 1:,}")  # minus TARGET
-        with col_c:
-            if "TARGET" in home_df.columns:
-                default_rate = home_df["TARGET"].mean()
-                st.metric("Default Rate (sample)", f"{default_rate:.1%}")
-            else:
-                st.metric("Default Rate", "N/A")
-
-        st.markdown("#### Example Rows")
-        st.dataframe(home_df.head(), use_container_width=True)
-
-        st.markdown("#### Basic Statistics (Numeric Features)")
-        num_desc = home_df.select_dtypes(include="number").describe().T
-        st.dataframe(num_desc.round(2), use_container_width=True)
-
-        st.markdown(
-            """
 **Target definition (`TARGET`):**  
 
 - `0` – loan was **repaid** on time (non-default)  
