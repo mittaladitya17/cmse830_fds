@@ -1,5 +1,5 @@
 # Credit Risk Scoring Dashboard
-Machine Learning Application for Predicting Loan Default Risk
+## Machine Learning Application for Predicting Loan Default Risk
 ## Overview
 - This project is an interactive Streamlit web application designed to simulate a real-world credit risk assessment system, similar to those used by banks, fintech companies, and lending institutions.
 - Users can explore data, compare machine learning models, run predictions for a single applicant, and upload full CSV files to score many applicants at once.
