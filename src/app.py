@@ -543,7 +543,7 @@ with tab3:
     if home_result is None:
         st.warning("Home Credit models are not available (missing dataset or training error).")
     else:
-        metrics_df = home_result["metrics_df"]
+        metrics_df = home_result["summary"]
 
         st.markdown(
             """
