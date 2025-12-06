@@ -13,29 +13,29 @@ Machine Learning Application for Predicting Loan Default Risk
 
 ### Datasets Used
 1. German Credit Dataset (credit-g.csv)
-- Used for:
- - Single applicant scoring
- - Batch scoring demo
- - Simple baseline risk model
-- Description:
- - ~1000 applicants
- - Well-structured categorical + numeric features
- - Binary target indicating good/bad credit risk
+ - Used for:
+  - Single applicant scoring
+  - Batch scoring demo
+  - Simple baseline risk model
+ - Description:
+  - ~1000 applicants
+  - Well-structured categorical + numeric features
+  - Binary target indicating good/bad credit risk
 
 2. Home Credit Sample Dataset (home_credit_sample.csv)
 A subset extracted from the massive Kaggle Home Credit Default Risk dataset.
-- Used for:
- - Full EDA
- - Multi-model training & comparison
- - Realistic credit-risk modeling
-- Why this dataset?
- - Higher dimensionality & complexity
- - Non-linear patterns
- - Missing values, socioeconomic variables, loan behavior signals
- - Mimics real financial industry data
-- Target variable:
- - TARGET = 1 → Default
- - TARGET = 0 → Repaid
+ - Used for:
+  - Full EDA
+  - Multi-model training & comparison
+  - Realistic credit-risk modeling
+ - Why this dataset?
+  - Higher dimensionality & complexity
+  - Non-linear patterns
+  - Missing values, socioeconomic variables, loan behavior signals
+  - Mimics real financial industry data
+ - Target variable:
+  - TARGET = 1 → Default
+  - TARGET = 0 → Repaid
 
 ### Workflow Summary
 1. Initial Data Analysis (IDA)
