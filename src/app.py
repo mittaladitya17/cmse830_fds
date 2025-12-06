@@ -32,6 +32,9 @@ except ImportError:
     HAS_XGB = False
 
 import joblib
+german_df, credit_pipe, credit_meta = load_german_credit()
+home_df = load_home_credit()
+home_result = train_home_models(home_df) if home_df is not None else None
 
 
 # =====================================================================================
@@ -57,30 +60,46 @@ def load_german_credit():
 # =====================================================================================
 # Utility: Load Home Credit *sample* (final dataset)
 # =====================================================================================
+# ---------- HOME CREDIT: DATA LOADER ----------
+
 @st.cache_data
-def load_home_credit_sample():
+def load_home_credit():
     """
-    Load the smaller sample of the Home Credit dataset.
+    Load the Home Credit *sample* dataset from the data folder.
 
-    You told me you cut down the big 216 MB file and uploaded it to data/.
-    I'm assuming the name is 'application_train_sample.csv'.
-    Change the filename here if yours is different.
+    Expects: data/home_credit_sample.csv
+
+    Returns
+    -------
+    df : pd.DataFrame | None
+        Cleaned dataframe (basic filtering + target present) or None if file is missing.
     """
-    # Try a couple of common names
-    candidates = [
-        DATA_DIR / "application_train_sample.csv",
-        DATA_DIR / "home-credit-default-risk" / "application_train_sample.csv",
-        DATA_DIR / "home-credit-default-risk" / "application_train.csv",  # fallback
-    ]
-    for path in candidates:
-        if path.exists():
-            df = pd.read_csv(path)
-            # Keep only rows where TARGET exists and is not NaN
-            if "TARGET" in df.columns:
-                df = df.dropna(subset=["TARGET"])
-            return df
-    return None
+    from pathlib import Path
 
+    data_path = (
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "home_credit_sample.csv"   # <-- your actual file name
+    )
+
+    if not data_path.exists():
+        st.warning(f"Home Credit sample not found at: {data_path}")
+        return None
+
+    df = pd.read_csv(data_path)
+
+    # Home Credit target column is typically called 'TARGET'
+    if "TARGET" not in df.columns:
+        st.warning("Column 'TARGET' not found in Home Credit sample.")
+        return None
+
+    # Drop rows with missing target
+    df = df.dropna(subset=["TARGET"])
+    df["TARGET"] = df["TARGET"].astype(int)
+
+    # Optional: keep only a subset of columns if your sample is wide
+    # For safety, just return as-is and handle columns in train_home_models
+    return df
 
 # =====================================================================================
 # Load midterm pipeline (German credit) if available
@@ -100,78 +119,100 @@ def load_german_pipeline():
 # =====================================================================================
 # Train models on Home Credit sample (LogReg, RF, XGB)
 # =====================================================================================
-@st.cache_resource(show_spinner="Training models on Home Credit sample…")
-def train_home_models(home_df: pd.DataFrame):
-    """
-    Train three models on the Home Credit sample:
-    - Logistic Regression
-    - Random Forest
-    - XGBoost (if installed)
+# ---------- HOME CREDIT: MODEL TRAINING ----------
 
-    We:
-    - Drop obvious ID columns
-    - Impute missing values
-    - Scale numeric features
-    - One-hot encode categorical features
-    - Evaluate on a held-out test set
-    """
-    df = home_df.copy()
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+)
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 
-    if "TARGET" not in df.columns:
+try:
+    from xgboost import XGBClassifier
+    HAS_XGB = True
+except Exception:
+    HAS_XGB = False
+
+
+@st.cache_data(show_spinner="Training Home Credit models (sample)...")
+def train_home_models(df: pd.DataFrame):
+    """
+    Train multiple classifiers on the Home Credit sample dataset.
+
+    Returns
+    -------
+    result : dict
+        {
+          "models": {name: fitted_model, ...},
+          "X_test": X_test,
+          "y_test": y_test,
+          "summary": pd.DataFrame (metrics per model),
+        }
+    """
+    if df is None or df.empty:
         return None
 
-    # Drop rows with missing target just in case
-    df = df.dropna(subset=["TARGET"])
-
-    # Separate target
+    # --- 1. Split features and target ---
+    df = df.copy()
     y = df["TARGET"].astype(int)
+    X = df.drop(columns=["TARGET"])
 
-    # Drop obvious ID columns if present
-    id_cols = [c for c in ["SK_ID_CURR", "SK_ID_BUREAU", "SK_ID_PREV"] if c in df.columns]
-    X = df.drop(columns=["TARGET"] + id_cols)
+    # Replace ±inf with NaN so the imputers can handle them
+    X = X.replace([np.inf, -np.inf], np.nan)
 
-    # Identify column types
+    # --- 2. Identify numeric and categorical columns ---
     cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
-    num_cols = X.select_dtypes(include=["number", "bool"]).columns.tolist()
+    num_cols = X.select_dtypes(include=["number"]).columns.tolist()
 
-    # Basic safety: if some numeric columns are completely NaN, drop them
-    num_cols = [c for c in num_cols if X[c].notna().sum() > 0]
+    # Safety: in case there are no numeric or no categorical columns
+    if len(num_cols) == 0 and len(cat_cols) == 0:
+        st.warning("No usable feature columns detected in Home Credit sample.")
+        return None
 
-    # Column transformer with imputation
-    numeric_transformer = Pipeline(
+    # --- 3. Build preprocessing pipelines ---
+    num_pipe = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
             ("scaler", StandardScaler()),
         ]
     )
 
-    categorical_transformer = Pipeline(
+    cat_pipe = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+            (
+                "ohe",
+                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+            ),
         ]
     )
 
-    preprocessor = ColumnTransformer(
+    pre = ColumnTransformer(
         transformers=[
-            ("num", numeric_transformer, num_cols),
-            ("cat", categorical_transformer, cat_cols),
-        ],
-        remainder="drop",
-        n_jobs=None,
+            ("num", num_pipe, num_cols),
+            ("cat", cat_pipe, cat_cols),
+        ]
     )
 
-    # Define models
+    # --- 4. Define models ---
     models = {
         "Logistic Regression": LogisticRegression(
-            max_iter=1000, class_weight="balanced", n_jobs=None
+            max_iter=1000, class_weight="balanced"
         ),
         "Random Forest": RandomForestClassifier(
             n_estimators=200,
             max_depth=None,
-            n_jobs=-1,
-            class_weight="balanced_subsample",
             random_state=42,
+            class_weight="balanced_subsample",
+            n_jobs=-1,
         ),
     }
 
@@ -184,11 +225,23 @@ def train_home_models(home_df: pd.DataFrame):
             colsample_bytree=0.8,
             objective="binary:logistic",
             eval_metric="logloss",
-            tree_method="hist",
             random_state=42,
+            n_jobs=-1,
         )
 
-    # Train/test split
+    # Wrap each in a pipeline
+    model_pipelines = {}
+    for name, clf in models.items():
+        model_pipelines[name] = Pipeline(
+            steps=[
+                ("pre", pre),
+                ("clf", clf),
+            ]
+        )
+
+    # --- 5. Train/test split ---
+    from sklearn.model_selection import train_test_split
+
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
@@ -197,28 +250,22 @@ def train_home_models(home_df: pd.DataFrame):
         stratify=y,
     )
 
-    metrics_rows = []
-    trained_models = {}
+    # --- 6. Fit & evaluate each model ---
+    rows = []
+    fitted_models = {}
 
-    for name, clf in models.items():
-        pipe = Pipeline(
-            steps=[
-                ("preprocess", preprocessor),
-                ("clf", clf),
-            ]
-        )
-
+    for name, pipe in model_pipelines.items():
         pipe.fit(X_train, y_train)
-        y_prob = pipe.predict_proba(X_test)[:, 1]
-        y_pred = (y_prob >= 0.5).astype(int)
+        y_pred = pipe.predict(X_test)
+        y_proba = pipe.predict_proba(X_test)[:, 1]
 
         acc = accuracy_score(y_test, y_pred)
         prec = precision_score(y_test, y_pred, zero_division=0)
-        rec = recall_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred)
-        auc = roc_auc_score(y_test, y_prob)
+        rec = recall_score(y_test, y_pred, zero_division=0)
+        f1 = f1_score(y_test, y_pred, zero_division=0)
+        auc = roc_auc_score(y_test, y_proba)
 
-        metrics_rows.append(
+        rows.append(
             {
                 "model": name,
                 "accuracy": acc,
@@ -228,19 +275,19 @@ def train_home_models(home_df: pd.DataFrame):
                 "roc_auc": auc,
             }
         )
-        trained_models[name] = pipe
+        fitted_models[name] = pipe
 
-    metrics_df = pd.DataFrame(metrics_rows).set_index("model").sort_values(
-        "roc_auc", ascending=False
+    summary = pd.DataFrame(rows).set_index("model").sort_values(
+        by="roc_auc", ascending=False
     )
 
-    return {
-        "metrics": metrics_df,
-        "models": trained_models,
+    result = {
+        "models": fitted_models,
         "X_test": X_test,
         "y_test": y_test,
+        "summary": summary,
     }
-
+    return result
 
 # =====================================================================================
 # Simple EDA helpers
@@ -521,7 +568,7 @@ with tab3:
     elif home_result is None:
         st.error("Something went wrong while training models on the Home Credit sample.")
     else:
-        metrics_df = home_result["metrics"]
+        metrics_df = home_result["summary"]
 
         st.markdown(
             """
