@@ -98,142 +98,159 @@ def load_home_credit_sample():
 # --------------------------------------------------------------------
 # TRAIN HOME CREDIT MODELS (LOGREG + RF + XGB)
 # --------------------------------------------------------------------
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=True)
 def train_home_models(df: pd.DataFrame):
     """
-    Train 3 models on the Home Credit sample dataset:
+    Train three models on the Home Credit sample dataset:
     - Logistic Regression
     - Random Forest
-    - XGBoost
+    - XGBoost (if available)
 
-    Returns metrics and the best model + preprocessor so we can reuse them
-    in the app (single prediction, batch prediction, model metrics tab).
+    Returns a dictionary containing:
+    - models: dict[model_name -> trained pipeline]
+    - metrics_df: DataFrame with ROC AUC, Accuracy, Precision, Recall, F1
+    - best_name: name of best model by ROC AUC
+    - best_model: the trained pipeline of the best model
+    - feature_cols: list of feature columns used
+    - target_col: name of target column
     """
-    # 1. Target + features
-    if "TARGET" not in df.columns:
-        return None  # we can't train without the target
+    from sklearn.model_selection import train_test_split
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import OneHotEncoder, StandardScaler
+    from sklearn.pipeline import Pipeline
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import (
+        roc_auc_score,
+        accuracy_score,
+        precision_score,
+        recall_score,
+        f1_score,
+    )
 
+    try:
+        from xgboost import XGBClassifier
+        HAS_XGB = True
+    except Exception:
+        HAS_XGB = False
+
+    # ---- 1. Basic cleaning & target split ----
     target_col = "TARGET"
-    y = df[target_col].astype(int)
-    X = df.drop(columns=[target_col])
+    if target_col not in df.columns:
+        st.error(f"Target column '{target_col}' not found in dataset.")
+        return None
 
-    # 2. Identify numeric and categorical columns
-    num_cols = X.select_dtypes(include=["number"]).columns.tolist()
-    cat_cols = X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+    # Drop obvious ID-like columns if present
+    drop_cols = [c for c in ["SK_ID_CURR", "SK_ID_BUREAU", "SK_ID_PREV"] if c in df.columns]
 
-    # 3. Build preprocessors WITH IMPUTATION  ← this is the key fix
+    df_model = df.drop(columns=drop_cols, errors="ignore").copy()
 
-    # numeric: median impute -> scale
-    num_tf = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-        ]
-    )
+    # Separate X, y
+    y = df_model[target_col].astype(int)
+    X = df_model.drop(columns=[target_col])
 
-    # categorical: most_frequent impute -> one-hot
-    cat_tf = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("onehot", OneHotEncoder(handle_unknown="ignore")),
-        ]
-    )
+    # Identify column types
+    cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    num_cols = X.select_dtypes(include=["number", "float", "int"]).columns.tolist()
 
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("num", num_tf, num_cols),
-            ("cat", cat_tf, cat_cols),
-        ]
-    )
+    # Just in case something weird happens
+    feature_cols = num_cols + cat_cols
 
-    # 4. Train / test split
-    X_train, X_test, y_train, y_test = train_test_split(
+    # Train/validation split
+    X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.25, random_state=42, stratify=y
     )
 
-    # 5. Define models
-    models = {
+    # ---- 2. Preprocessing ----
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), num_cols),
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols),
+        ],
+        remainder="drop",
+    )
+
+    # ---- 3. Define models ----
+    models_def = {
         "Logistic Regression": LogisticRegression(
-            max_iter=1000, class_weight="balanced"
+            max_iter=1000,
+            class_weight="balanced",
+            n_jobs=None,
         ),
         "Random Forest": RandomForestClassifier(
-            n_estimators=200, max_depth=None, n_jobs=-1, class_weight="balanced"
+            n_estimators=200,
+            max_depth=None,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            n_jobs=-1,
+            class_weight="balanced_subsample",
+            random_state=42,
         ),
-        "XGBoost": XGBClassifier(
-            n_estimators=300,
+    }
+
+    if HAS_XGB:
+        models_def["XGBoost"] = XGBClassifier(
+            n_estimators=200,
             learning_rate=0.05,
             max_depth=4,
             subsample=0.8,
             colsample_bytree=0.8,
-            objective="binary:logistic",
             eval_metric="logloss",
+            random_state=42,
             n_jobs=-1,
-        ),
-    }
+        )
 
-    results = {}
-    best_auc = -1.0
-    best_name = None
-    best_pipe = None
+    # ---- 4. Train & evaluate ----
+    models = {}
+    rows = []
 
-    for name, clf in models.items():
+    for name, clf in models_def.items():
         pipe = Pipeline(
             steps=[
                 ("pre", preprocessor),
                 ("clf", clf),
             ]
         )
-
         pipe.fit(X_train, y_train)
 
-        # Probabilities + metrics
-        prob_test = pipe.predict_proba(X_test)[:, 1]
-        pred_test = (prob_test >= 0.5).astype(int)
+        # Probabilities & predictions
+        proba_val = pipe.predict_proba(X_val)[:, 1]
+        pred_val = (proba_val >= 0.5).astype(int)
 
-        auc = roc_auc_score(y_test, prob_test)
-        acc = accuracy_score(y_test, pred_test)
-        prec = precision_score(y_test, pred_test, zero_division=0)
-        rec = recall_score(y_test, pred_test, zero_division=0)
-        f1 = f1_score(y_test, pred_test, zero_division=0)
+        roc_auc = roc_auc_score(y_val, proba_val)
+        acc = accuracy_score(y_val, pred_val)
+        prec = precision_score(y_val, pred_val, zero_division=0)
+        rec = recall_score(y_val, pred_val)
+        f1 = f1_score(y_val, pred_val)
 
-        results[name] = {
-            "pipeline": pipe,
-            "auc": auc,
-            "accuracy": acc,
-            "precision": prec,
-            "recall": rec,
-            "f1": f1,
-        }
-
-        if auc > best_auc:
-            best_auc = auc
-            best_name = name
-            best_pipe = pipe
-
-    # 6. Pack everything for the UI
-    summary_df = pd.DataFrame(
-        [
+        rows.append(
             {
                 "Model": name,
-                "ROC AUC": res["auc"],
-                "Accuracy": res["accuracy"],
-                "Precision": res["precision"],
-                "Recall": res["recall"],
-                "F1": res["f1"],
+                "ROC_AUC": roc_auc,
+                "Accuracy": acc,
+                "Precision": prec,
+                "Recall": rec,
+                "F1": f1,
             }
-            for name, res in results.items()
-        ]
-    ).sort_values("ROC AUC", ascending=False)
+        )
+
+        models[name] = pipe  # 👈 store trained pipeline
+
+    metrics_df = pd.DataFrame(rows).set_index("Model").sort_values(
+        by="ROC_AUC", ascending=False
+    )
+
+    best_name = metrics_df.index[0]
+    best_model = models[best_name]
 
     return {
-        "results": results,
-        "summary": summary_df,
+        "models": models,          # 👈 this fixes your KeyError
+        "metrics_df": metrics_df,
         "best_name": best_name,
-        "best_pipeline": best_pipe,
+        "best_model": best_model,
+        "feature_cols": feature_cols,
         "target_col": target_col,
-        "feature_cols": num_cols + cat_cols,
     }
-
 # --------------------------------------------------------------------
 # MAIN APP
 # --------------------------------------------------------------------
