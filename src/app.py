@@ -1,269 +1,328 @@
-# app.py  – Final version for CMSE 830 project
-import streamlit as st
-import pandas as pd
-import numpy as np
-
+# src/app.py
+import os
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+import streamlit as st
 import matplotlib.pyplot as plt
-import plotly.express as px
 import seaborn as sns
+import plotly.express as px
 
 import joblib
 
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+    confusion_matrix,
+    classification_report,
+)
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, roc_auc_score, f1_score
 
-# Try to import XGBoost – if not installed, we just skip it gracefully
+# Try to import XGBoost, but don't crash app if not available
 try:
     from xgboost import XGBClassifier
-    HAS_XGB = True
+    XGB_AVAILABLE = True
 except Exception:
-    HAS_XGB = False
+    XGB_AVAILABLE = False
 
 
-# ---------------------------------------------------------------------
-# Paths and helper functions
-# ---------------------------------------------------------------------
-HERE = Path(__file__).resolve().parent          # .../src
-ROOT = HERE.parent                              # repo root
+# --------------------------------------------------------------------
+# PATHS
+# --------------------------------------------------------------------
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent           # repo root
 DATA_DIR = ROOT / "data"
 MODELS_DIR = ROOT / "models"
 
-GERMAN_DATA_PATH = DATA_DIR / "credit-g.csv"
+GERMAN_PATH = DATA_DIR / "credit-g.csv"
 GERMAN_MODEL_PATH = MODELS_DIR / "credit_pipeline.joblib"
 GERMAN_META_PATH = MODELS_DIR / "metadata.joblib"
 
-HOME_DATA_PATH = DATA_DIR / "home_credit_sample.csv"
+HOME_SAMPLE_PATH = DATA_DIR / "home_credit_sample.csv"
 
 
+# --------------------------------------------------------------------
+# SMALL UTIL
+# --------------------------------------------------------------------
 def require_file(p: Path, label: str) -> Path:
-    """Small helper to fail clearly if a file is missing."""
+    """Raise a clean error if expected file is missing."""
     if not p.exists():
         raise FileNotFoundError(f"{label} not found at: {p}")
     return p
 
 
+# --------------------------------------------------------------------
+# LOAD GERMAN CREDIT: PRETRAINED PIPELINE (MIDTERM PART)
+# --------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def load_german_model():
-    """Load the original German Credit pipeline + its metadata."""
+    """Load pre-trained German Credit pipeline + metadata."""
     pipe = joblib.load(require_file(GERMAN_MODEL_PATH, "German model"))
     meta = joblib.load(require_file(GERMAN_META_PATH, "German metadata"))
     return pipe, meta
 
 
-@st.cache_resource(show_spinner=False)
-def load_home_data():
-    """Load the Home Credit sample dataset."""
-    try:
-        df = pd.read_csv(require_file(HOME_DATA_PATH, "Home Credit sample"))
-    except Exception as e:
-        st.error(f"Could not load Home Credit sample: {e}")
-        return None
+@st.cache_data(show_spinner=False)
+def load_german_data():
+    df = pd.read_csv(require_file(GERMAN_PATH, "credit-g.csv"))
     return df
 
 
+# --------------------------------------------------------------------
+# LOAD HOME CREDIT SAMPLE
+# --------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def load_home_credit_sample():
+    """Load the smaller Home Credit training sample from data/."""
+    if not HOME_SAMPLE_PATH.exists():
+        st.warning(
+            f"Home Credit sample file not found at {HOME_SAMPLE_PATH}. "
+            "EDA and advanced models will be limited."
+        )
+        return None
+    df = pd.read_csv(HOME_SAMPLE_PATH)
+    return df
+
+
+# --------------------------------------------------------------------
+# TRAIN HOME CREDIT MODELS (LOGREG + RF + XGB)
+# --------------------------------------------------------------------
 @st.cache_resource(show_spinner=True)
 def train_home_models(df: pd.DataFrame):
     """
     Train three models on the Home Credit sample:
-      - Logistic Regression
-      - Random Forest
-      - XGBoost (if available)
+    - Logistic Regression
+    - Random Forest
+    - XGBoost (if available)
 
-    Returns a dict with models, metrics, feature cols, and best model name.
+    Returns a dictionary with:
+        models      : dict of fitted pipelines
+        metrics_df  : DataFrame with metrics per model
+        best_name   : name of best model (by ROC AUC)
+        best_model  : fitted pipeline
+        feature_cols: list of original feature columns used
+        target_col  : name of target
+        X_test, y_test: hold-out set for visualization
     """
-    df = df.copy()
 
-    # Home Credit train has TARGET as label (0 = paid, 1 = default)
+    # Ensure target exists
     if "TARGET" not in df.columns:
-        st.error("Home Credit sample must contain a 'TARGET' column.")
+        st.warning("No TARGET column in Home Credit sample; cannot train models.")
         return None
 
-    y = df["TARGET"].astype(int)
-    X = df.drop(columns=["TARGET"])
+    # Basic clean-up: drop rows with missing TARGET
+    df = df.copy()
+    df = df.dropna(subset=["TARGET"])
 
-    # very simple missing handling (just to make sure models fit)
-    # numeric -> fill 0, categorical -> "Unknown"
-    num_cols = X.select_dtypes(include=["number"]).columns.tolist()
-    cat_cols = X.select_dtypes(exclude=["number"]).columns.tolist()
+    # Use only a subset of rows for speed on Streamlit Cloud
+    # (still large enough to be realistic)
+    max_rows = 10000
+    if len(df) > max_rows:
+        df = df.sample(max_rows, random_state=42)
 
-    X[num_cols] = X[num_cols].fillna(0)
-    X[cat_cols] = X[cat_cols].fillna("Unknown")
+    target_col = "TARGET"
+    feature_cols = [c for c in df.columns if c != target_col]
 
+    X = df[feature_cols]
+    y = df[target_col].astype(int)
+
+    # Split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.25, random_state=42, stratify=y
     )
 
-    preprocessor = ColumnTransformer(
+    # Identify column types
+    cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    num_cols = X.select_dtypes(include=["number", "bool"]).columns.tolist()
+
+    pre = ColumnTransformer(
         transformers=[
-            ("num", StandardScaler(), num_cols),
             ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
-        ]
+            ("num", StandardScaler(), num_cols),
+        ],
+        remainder="drop",
     )
 
     models = {}
-    metrics_rows = []
 
     # Logistic Regression
-    pipe_lr = LogisticRegression(
+    lr = LogisticRegression(
         max_iter=1000,
         class_weight="balanced",
         n_jobs=None,
     )
-    pipe_lr = PipelineWrap(preprocessor, pipe_lr)
+    pipe_lr = Pipeline([("pre", pre), ("clf", lr)])
     pipe_lr.fit(X_train, y_train)
-    lr_metrics = compute_metrics(pipe_lr, X_test, y_test, "Logistic Regression")
     models["Logistic Regression"] = pipe_lr
-    metrics_rows.append(lr_metrics)
 
     # Random Forest
     rf = RandomForestClassifier(
         n_estimators=200,
-        max_depth=10,
-        random_state=42,
+        max_depth=None,
         n_jobs=-1,
-        class_weight="balanced",
+        class_weight="balanced_subsample",
+        random_state=42,
     )
-    pipe_rf = PipelineWrap(preprocessor, rf)
+    pipe_rf = Pipeline([("pre", pre), ("clf", rf)])
     pipe_rf.fit(X_train, y_train)
-    rf_metrics = compute_metrics(pipe_rf, X_test, y_test, "Random Forest")
     models["Random Forest"] = pipe_rf
-    metrics_rows.append(rf_metrics)
 
-    # XGBoost – only if available
-    if HAS_XGB:
+    # XGBoost (optional)
+    if XGB_AVAILABLE:
         xgb = XGBClassifier(
             n_estimators=300,
-            max_depth=4,
             learning_rate=0.05,
+            max_depth=4,
             subsample=0.8,
             colsample_bytree=0.8,
-            random_state=42,
             eval_metric="logloss",
+            random_state=42,
             n_jobs=-1,
         )
-        pipe_xgb = PipelineWrap(preprocessor, xgb)
+        pipe_xgb = Pipeline([("pre", pre), ("clf", xgb)])
         pipe_xgb.fit(X_train, y_train)
-        xgb_metrics = compute_metrics(pipe_xgb, X_test, y_test, "XGBoost")
         models["XGBoost"] = pipe_xgb
-        metrics_rows.append(xgb_metrics)
 
-    metrics_df = pd.DataFrame(metrics_rows).set_index("model")
+    # Compute metrics
+    rows = []
+    for name, model in models.items():
+        prob = model.predict_proba(X_test)[:, 1]
+        pred = (prob >= 0.5).astype(int)
 
-    # choose best model by ROC AUC
-    best_name = metrics_df["roc_auc"].idxmax()
-    return {
+        rows.append(
+            {
+                "Model": name,
+                "Accuracy": accuracy_score(y_test, pred),
+                "Precision": precision_score(y_test, pred, zero_division=0),
+                "Recall": recall_score(y_test, pred, zero_division=0),
+                "F1": f1_score(y_test, pred, zero_division=0),
+                "ROC AUC": roc_auc_score(y_test, prob),
+            }
+        )
+
+    metrics_df = pd.DataFrame(rows).set_index("Model").sort_values("ROC AUC", ascending=False)
+    best_name = metrics_df["ROC AUC"].idxmax()
+    best_model = models[best_name]
+
+    result = {
         "models": models,
-        "metrics": metrics_df,
-        "feature_cols": X.columns.tolist(),
+        "metrics_df": metrics_df,
         "best_name": best_name,
+        "best_model": best_model,
+        "feature_cols": feature_cols,
+        "target_col": target_col,
+        "X_test": X_test,
+        "y_test": y_test,
     }
+    return result
 
 
-class PipelineWrap:
-    """
-    Tiny wrapper so we can keep preprocessor + estimator together
-    without using sklearn.Pipeline (to avoid worrying about sparse support
-    on Streamlit Cloud, etc.).
-    """
-
-    def __init__(self, pre, est):
-        self.pre = pre
-        self.est = est
-
-    def fit(self, X, y):
-        Xt = self.pre.fit_transform(X)
-        self.est.fit(Xt, y)
-        return self
-
-    def predict(self, X):
-        Xt = self.pre.transform(X)
-        return self.est.predict(Xt)
-
-    def predict_proba(self, X):
-        Xt = self.pre.transform(X)
-        return self.est.predict_proba(Xt)
-
-
-def compute_metrics(model, X_test, y_test, name):
-    """Compute basic metrics for a binary classifier."""
-    prob = model.predict_proba(X_test)[:, 1]
-    pred = (prob >= 0.5).astype(int)
-
-    return {
-        "model": name,
-        "accuracy": accuracy_score(y_test, pred),
-        "roc_auc": roc_auc_score(y_test, prob),
-        "f1": f1_score(y_test, pred),
-    }
-
-
-# ---------------------------------------------------------------------
-# Streamlit layout
-# ---------------------------------------------------------------------
+# --------------------------------------------------------------------
+# MAIN APP
+# --------------------------------------------------------------------
 st.set_page_config(
     page_title="Credit Risk Analysis Dashboard",
     layout="wide",
 )
 
+
 st.title("Credit Risk Analysis Dashboard")
 
 pipe_german, meta_german = load_german_model()
-home_df = load_home_data()
+german_df = load_german_data()
+home_df = load_home_credit_sample()
 home_result = train_home_models(home_df) if home_df is not None else None
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Overview", "EDA", "Model Metrics", "Single Prediction", "Batch Prediction"]
+    ["Overview", "EDA (Home Credit)", "Model Metrics", "Single Prediction", "Batch Prediction"]
 )
 
-# ---------------------------------------------------------------------
-# Tab 1 – Overview
-# ---------------------------------------------------------------------
+# --------------------------------------------------------------------
+# TAB 1: OVERVIEW / DOCUMENTATION
+# --------------------------------------------------------------------
 with tab1:
     st.subheader("What This App Does")
+
     st.markdown(
         """
-- Uses **two datasets**:  
-  - German Credit dataset (small, classic dataset – used for quick single-applicant predictions).  
-  - Home Credit sample dataset (larger, more realistic – used for EDA, model training, and batch scoring).  
-- Trains three models on the Home Credit data:
-  - **Logistic Regression**
-  - **Random Forest**
-  - **XGBoost** 
-- Lets you:
-  - Explore the Home Credit data interactively (EDA tab).
-  - Compare model performance (Model Metrics tab).
-  - Score a single German Credit applicant (Single Prediction tab).
-  - Upload a CSV of Home Credit-style applicants and get risk scores (Batch Prediction tab).
-        """
+This Streamlit web application demonstrates how **data science and machine learning** can be 
+used to **assess credit risk** and support lending decisions.
+
+We work with **two real-world credit datasets**:
+
+- 🟥 **German Credit (UCI)** – a compact dataset with 1,000 customers.  
+  We trained and saved a classic **Logistic Regression** pipeline on this data (used in the midterm).  
+  It still powers the basic *single* and *batch* prediction features.
+
+- 🟦 **Home Credit Default Risk (Kaggle, sampled)** – a much larger, richer dataset describing 
+  thousands of loan applications with financial, demographic, and behavioral features.
+  We use a **sample** of the training data (stored as `home_credit_sample.csv`) to:
+  - perform deeper **Exploratory Data Analysis (EDA)**
+  - train three models:
+      * Logistic Regression  
+      * Random Forest  
+      * XGBoost (if available in the environment)
+  - compare model performance and visualize confusion matrices
+  - make predictions for **individual clients** and **uploaded CSV batches**
+
+---
+
+### Problem Statement
+
+For a lender, the central question is:
+
+> **“Given an applicant’s profile, what is the probability that they will default on their loan?”**
+
+Incorrectly approving a high-risk customer leads to losses; incorrectly rejecting a good customer 
+means missed revenue. This app explores how different models and features can help balance those risks.
+
+---
+
+### How to Navigate the App
+
+- **EDA (Home Credit)** – Explore distributions, target comparisons, and correlations interactively.  
+- **Model Metrics** – Compare Logistic Regression, Random Forest, and XGBoost on the Home Credit sample.  
+- **Single Prediction** – Enter features for one applicant and see estimated default probability.  
+- **Batch Prediction** – Download a CSV template, fill it with multiple applicants, upload it, and
+  receive a scored file with default probabilities.
+
+Use this app as a **mini end-to-end project**: from data understanding → feature engineering → model
+comparison → interactive deployment.
+"""
     )
 
-# ---------------------------------------------------------------------
-# Tab 2 – EDA on Home Credit sample
-# ---------------------------------------------------------------------
+# --------------------------------------------------------------------
+# TAB 2: EDA – HOME CREDIT
+# --------------------------------------------------------------------
 with tab2:
     st.subheader("Exploratory Data Analysis – Home Credit Sample")
 
     if home_df is None:
-        st.error("Home Credit sample could not be loaded.")
+        st.warning("Home Credit sample could not be loaded. EDA is limited.")
     else:
         df = home_df.copy()
-        target_col = "TARGET" if "TARGET" in df.columns else None
 
+        target_col = "TARGET" if "TARGET" in df.columns else None
         if target_col:
-            st.caption("Target column `TARGET`: 1 = default, 0 = no default.")
+            st.caption("Target column: `TARGET` (1 = default, 0 = no default).")
         else:
             st.warning(
-                "No `TARGET` column found. EDA will still work, but plots "
-                "cannot be coloured by the target."
+                "No `TARGET` column in the sample – EDA will still work, but cannot be colored by default status."
             )
 
-        # --- Basic info cards
-        st.markdown("#### Basic Info")
+        # --- Basic info cards ---
+        st.markdown("#### Basic Information")
         c1, c2, c3 = st.columns(3)
         with c1:
             st.metric("Rows", df.shape[0])
@@ -272,256 +331,385 @@ with tab2:
         with c3:
             st.metric("Missing values", int(df.isna().sum().sum()))
 
-        # --- Summary statistics
+        # --- Summary statistics with backwards-compatible describe ---
         with st.expander("Show summary statistics"):
             try:
+                # Newer pandas
                 st.write(df.describe(include="all", datetime_is_numeric=True).T)
             except TypeError:
-                # older pandas on Streamlit Cloud may not support datetime_is_numeric
+                # Older pandas fallback
                 st.write(df.describe(include="all").T)
 
-        # identify numeric / categorical columns
-        num_cols = df.select_dtypes(include=["number"]).columns.tolist()
-        cat_cols = df.select_dtypes(
-            include=["object", "category", "bool"]
-        ).columns.tolist()
+        # --- Column summary table ---
+        st.markdown("#### Column Overview")
 
-        # --- 1. Univariate distribution (numeric)
-        st.markdown("### 1. Univariate Distribution (Numeric)")
-        if num_cols:
-            col_num = st.selectbox("Choose a numeric column:", num_cols, key="num_eda")
-            color_arg = target_col if target_col else None
-            fig = px.histogram(
-                df,
-                x=col_num,
-                color=color_arg,
-                marginal="box",
-                nbins=40,
-                title=f"Distribution of {col_num}",
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No numeric columns found.")
+        col_info = pd.DataFrame(
+            {
+                "dtype": df.dtypes,
+                "missing_%": df.isna().mean() * 100,
+                "n_unique": df.nunique(),
+            }
+        ).sort_values("missing_%", ascending=False)
 
-        # --- 2. Univariate distribution (categorical)
-        st.markdown("### 2. Univariate Distribution (Categorical)")
-        if cat_cols:
-            col_cat = st.selectbox("Choose a categorical column:", cat_cols, key="cat_eda")
+        st.dataframe(col_info)
 
-            if target_col:
-                counts = (
-                    df.groupby([col_cat, target_col])
-                    .size()
+        # Identify numeric & categorical
+        num_cols = df.select_dtypes(include=["number", "bool"]).columns.tolist()
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+        st.markdown("### Interactive Plots")
+
+        viz_type = st.radio(
+            "Choose an analysis type:",
+            [
+                "Numeric distribution",
+                "Categorical distribution",
+                "Relationship with target",
+                "Correlation heatmap",
+                "Feature vs. feature (scatter)",
+            ],
+        )
+
+        # --------------------------------------------------------------
+        # Numeric distribution
+        # --------------------------------------------------------------
+        if viz_type == "Numeric distribution":
+            if not num_cols:
+                st.info("No numeric columns found.")
+            else:
+                col_num = st.selectbox("Choose numeric feature", num_cols)
+                nbins = st.slider("Number of bins", 10, 80, 30)
+
+                if target_col:
+                    fig = px.histogram(
+                        df,
+                        x=col_num,
+                        color=target_col,
+                        nbins=nbins,
+                        barmode="overlay",
+                        marginal="box",
+                        opacity=0.75,
+                    )
+                else:
+                    fig = px.histogram(df, x=col_num, nbins=nbins, marginal="box")
+
+                fig.update_layout(height=450)
+                st.plotly_chart(fig, use_container_width=True)
+
+        # --------------------------------------------------------------
+        # Categorical distribution
+        # --------------------------------------------------------------
+        elif viz_type == "Categorical distribution":
+            if not cat_cols:
+                st.info("No categorical columns found.")
+            else:
+                col_cat = st.selectbox("Choose categorical feature", cat_cols)
+                top_n = st.slider("Show top N categories", 5, 30, 15)
+
+                temp = (
+                    df[col_cat]
+                    .value_counts(dropna=False)
+                    .head(top_n)
+                    .rename_axis(col_cat)
                     .reset_index(name="count")
                 )
+                temp["percent"] = temp["count"] / temp["count"].sum() * 100
+
                 fig = px.bar(
-                    counts,
+                    temp,
                     x=col_cat,
                     y="count",
-                    color=target_col,
-                    barmode="group",
-                    title=f"{col_cat} counts by TARGET",
+                    text="percent",
+                    labels={"count": "Count"},
                 )
+                fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+                fig.update_layout(xaxis_tickangle=-45, height=450)
+                st.plotly_chart(fig, use_container_width=True)
+
+        # --------------------------------------------------------------
+        # Relationship with target
+        # --------------------------------------------------------------
+        elif viz_type == "Relationship with target":
+            if not target_col:
+                st.info("TARGET column not found; cannot compare classes.")
             else:
-                counts = df[col_cat].value_counts().reset_index()
-                counts.columns = [col_cat, "count"]
-                fig = px.bar(
-                    counts,
-                    x=col_cat,
-                    y="count",
-                    title=f"Counts of {col_cat}",
+                # Only keep numeric columns with some variance
+                candidate_cols = [c for c in num_cols if c != target_col]
+                if not candidate_cols:
+                    st.info("No suitable numeric columns found.")
+                else:
+                    col_num = st.selectbox("Numeric feature", candidate_cols)
+                    plot_kind = st.radio(
+                        "Plot type", ["Boxplot", "Violin", "KDE (2 curves)"], horizontal=True
+                    )
+
+                    if plot_kind in ["Boxplot", "Violin"]:
+                        fig = px.box(
+                            df,
+                            x=target_col,
+                            y=col_num,
+                            points="all" if plot_kind == "Boxplot" else "outliers",
+                        )
+                        fig.update_layout(height=450)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        # KDE curves – use seaborn + matplotlib
+                        fig, ax = plt.subplots(figsize=(6, 4))
+                        sns.kdeplot(
+                            data=df,
+                            x=col_num,
+                            hue=target_col,
+                            common_norm=False,
+                            ax=ax,
+                        )
+                        ax.set_title(f"Density of {col_num} by TARGET")
+                        st.pyplot(fig)
+
+        # --------------------------------------------------------------
+        # Correlation heatmap (numeric)
+        # --------------------------------------------------------------
+        elif viz_type == "Correlation heatmap":
+            if not num_cols:
+                st.info("No numeric columns to correlate.")
+            else:
+                corr = df[num_cols].corr()
+
+                if target_col in corr.columns:
+                    # Show features most correlated with TARGET
+                    k = st.slider(
+                        "Show top K features (by absolute correlation with TARGET)",
+                        5,
+                        min(25, len(num_cols)),
+                        min(10, len(num_cols)),
+                    )
+                    target_corr = corr[target_col].abs().sort_values(ascending=False)
+                    top_features = target_corr.head(k).index.tolist()
+                    corr_view = corr.loc[top_features, top_features]
+                else:
+                    corr_view = corr
+
+                fig = px.imshow(
+                    corr_view,
+                    text_auto=".2f",
+                    color_continuous_scale="RdBu",
+                    zmin=-1,
+                    zmax=1,
+                )
+                fig.update_layout(height=600)
+                st.plotly_chart(fig, use_container_width=True)
+
+        # --------------------------------------------------------------
+        # Feature vs feature scatter
+        # --------------------------------------------------------------
+        else:
+            if len(num_cols) < 2:
+                st.info("Need at least two numeric columns for scatter plot.")
+            else:
+                x_col = st.selectbox("X axis", num_cols, index=0)
+                y_col = st.selectbox("Y axis", num_cols, index=1)
+                sample_n = st.slider(
+                    "Sample size (for speed)", 500, min(5000, len(df)), 2000, step=500
                 )
 
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No categorical columns found.")
+                df_sample = df.sample(sample_n, random_state=42)
 
-        # --- 3. Correlation heatmap
-        st.markdown("### 3. Correlation Heatmap (Numeric Features)")
-        if len(num_cols) > 1:
-            corr = df[num_cols].corr()
-            fig = px.imshow(
-                corr,
-                text_auto=False,
-                aspect="auto",
-                title="Correlation between numeric features",
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Not enough numeric columns for a correlation heatmap.")
+                if target_col:
+                    fig = px.scatter(
+                        df_sample,
+                        x=x_col,
+                        y=y_col,
+                        color=target_col,
+                        opacity=0.6,
+                    )
+                else:
+                    fig = px.scatter(df_sample, x=x_col, y=y_col, opacity=0.6)
 
-        # --- 4. 2D Scatter (numeric vs numeric, optional color by target)
-        st.markdown("### 4. 2D Scatter Plot")
-        if len(num_cols) >= 2:
-            x_sc = st.selectbox("X-axis", num_cols, index=0, key="scatter_x")
-            y_sc = st.selectbox("Y-axis", num_cols, index=1, key="scatter_y")
-
-            color_arg = target_col if target_col else None
-            fig = px.scatter(
-                df,
-                x=x_sc,
-                y=y_sc,
-                color=color_arg,
-                title=f"{x_sc} vs {y_sc}",
-                opacity=0.6,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Not enough numeric columns for a scatter plot.")
+                fig.update_layout(height=500)
+                st.plotly_chart(fig, use_container_width=True)
 
 
-# ---------------------------------------------------------------------
-# Tab 3 – Model Metrics (Home Credit)
-# ---------------------------------------------------------------------
+# --------------------------------------------------------------------
+# TAB 3: MODEL METRICS – HOME CREDIT
+# --------------------------------------------------------------------
 with tab3:
-    st.subheader("Model Performance Metrics (Home Credit Sample)")
+    st.subheader("Model Performance – Home Credit Sample")
 
-    if home_df is None or home_result is None:
-        st.error("Home Credit data or models are not available.")
+    if home_result is None:
+        st.warning("Home Credit models are not available (missing dataset or training error).")
     else:
-        metrics_df = home_result["metrics"].copy()
+        metrics_df = home_result["metrics_df"]
 
         st.markdown(
-            "These metrics are computed by training the models on the Home "
-            "Credit sample and evaluating them on a held-out test split."
+            """
+These metrics are computed on a **hold-out validation set** from the Home Credit sample.  
+Higher **ROC AUC** indicates a model that better separates default vs. non-default cases.
+"""
         )
 
         st.dataframe(metrics_df.style.format("{:.3f}"))
 
-        # ROC AUC comparison bar chart
-        st.markdown("#### ROC AUC Comparison")
-        fig = px.bar(
-            metrics_df.reset_index(),
-            x="model",
-            y="roc_auc",
-            title="ROC AUC by Model",
+        # Choose model for confusion matrix
+        model_name = st.selectbox("Select a model to inspect", metrics_df.index.tolist())
+        model = home_result["models"][model_name]
+        X_test = home_result["X_test"]
+        y_test = home_result["y_test"]
+
+        y_pred = model.predict(X_test)
+        cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
+
+        st.markdown("#### Confusion Matrix")
+        cm_df = pd.DataFrame(cm, index=["True 0", "True 1"], columns=["Pred 0", "Pred 1"])
+
+        fig = px.imshow(
+            cm_df,
+            text_auto=True,
+            color_continuous_scale="Blues",
         )
+        fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
 
-        if not HAS_XGB:
-            st.info(
-                "XGBoost is not installed in this environment, so only Logistic "
-                "Regression and Random Forest are compared here."
-            )
+        with st.expander("Show classification report text"):
+            report = classification_report(y_test, y_pred, digits=3)
+            st.text(report)
 
 
-# ---------------------------------------------------------------------
-# Tab 4 – Single prediction (German Credit model)
-# ---------------------------------------------------------------------
+# --------------------------------------------------------------------
+# TAB 4: SINGLE PREDICTION – USE BEST HOME CREDIT MODEL
+# --------------------------------------------------------------------
 with tab4:
-    st.subheader("Single Applicant Prediction (German Credit Dataset)")
+    st.subheader("Single Applicant Prediction (Home Credit Model)")
 
-    st.markdown(
-        "This form uses the **pretrained Logistic Regression pipeline** "
-        "built on the German Credit dataset. It is mainly here to show how "
-        "a single-applicant interface might look in production."
-    )
-
-    all_cols = meta_german["all_cols"]
-    user_input = {}
-
-    st.markdown("#### Enter Applicant Information")
-    for col in all_cols:
-        user_input[col] = [st.text_input(col, "")]
-
-    if st.button("Predict Risk (German Credit)"):
-        df_input = pd.DataFrame(user_input)
-
-        try:
-            prob = pipe_german.predict_proba(df_input)[:, 1][0]
-            st.metric("Estimated Default Probability", f"{prob:.2%}")
-            st.caption("Higher values indicate higher credit risk.")
-        except Exception as e:
-            st.error(f"Could not compute prediction: {e}")
-
-
-# ---------------------------------------------------------------------
-# Tab 5 – Batch prediction (Home Credit)
-# ---------------------------------------------------------------------
-with tab5:
-    st.subheader("Batch Prediction – Home Credit Sample Style")
-
-    if home_df is None or home_result is None:
-        st.error(
-            "Home Credit data or models are not available. "
-            "Please check that `home_credit_sample.csv` exists in the data folder."
+    if home_result is None or home_df is None:
+        st.info(
+            "Home Credit models are not available. Falling back to German Credit pipeline "
+            "from the midterm."
         )
+
+        # ---- Fallback: German Credit single prediction ----
+        st.markdown("#### German Credit – Single Prediction (Fallback)")
+
+        X_cols = meta_german["all_cols"]
+        cat_cols = meta_german["cat_cols"]
+        num_cols = meta_german["num_cols"]
+
+        input_data = {}
+        st.caption("Enter values for a single German Credit applicant:")
+
+        for col in X_cols:
+            if col in num_cols:
+                val = st.number_input(f"{col}", value=0.0)
+            else:
+                val = st.text_input(f"{col}")
+            input_data[col] = [val]
+
+        if st.button("Predict (German Model)"):
+            df_input = pd.DataFrame(input_data)
+            prob = pipe_german.predict_proba(df_input)[:, 1][0]
+            st.metric("Default Probability", f"{prob:.2%}")
+
     else:
-        best_name = home_result["best_name"]
-        best_model = home_result["models"][best_name]
+        best_model = home_result["best_model"]
         feature_cols = home_result["feature_cols"]
 
         st.markdown(
             f"""
-We use the **best model on the Home Credit sample**:  
-**{best_name}**  
-to score uploaded applicants.
-            """
+Using **best Home Credit model**: **{home_result['best_name']}**  
+Enter feature values for **one applicant**. For categorical fields, use one of the values
+that appear in the training data.
+"""
         )
 
-        # download template
-        st.markdown("#### 1. Download CSV Template")
-        template = home_df[feature_cols].head(50).copy()
-        csv_bytes = template.to_csv(index=False).encode("utf-8")
+        df_ref = home_df[feature_cols]
+
+        input_data = {}
+        with st.form("single_home_form"):
+            for col in feature_cols:
+                series = df_ref[col]
+
+                if pd.api.types.is_numeric_dtype(series):
+                    default_val = float(series.median()) if series.notna().any() else 0.0
+                    val = st.number_input(col, value=default_val)
+                else:
+                    choices = sorted(series.dropna().astype(str).unique().tolist())
+                    if not choices:
+                        val = ""
+                    else:
+                        val = st.selectbox(col, choices, index=0)
+                input_data[col] = [val]
+
+            submitted = st.form_submit_button("Predict default probability")
+
+        if submitted:
+            df_input = pd.DataFrame(input_data)
+            prob = best_model.predict_proba(df_input)[:, 1][0]
+            st.metric("Default Probability", f"{prob:.2%}")
+
+
+# --------------------------------------------------------------------
+# TAB 5: BATCH PREDICTION – HOME CREDIT BEST MODEL
+# --------------------------------------------------------------------
+with tab5:
+    st.subheader("Batch Prediction – Upload CSV of Applicants")
+
+    if home_result is None or home_df is None:
+        st.info(
+            "Home Credit models are not available. You can still run batch prediction "
+            "using the separate German Credit app or notebook."
+        )
+    else:
+        best_model = home_result["best_model"]
+        feature_cols = home_result["feature_cols"]
+
+        st.markdown(
+            """
+1. **Download a CSV template** with the correct columns.  
+2. Fill in rows for new applicants (keep column names unchanged).  
+3. Upload the completed file to get predicted default probabilities.
+"""
+        )
+
+        # --- Template download ---
+        template_df = home_df[feature_cols].head(200).copy()
+        template_bytes = template_df.to_csv(index=False).encode("utf-8")
+
         st.download_button(
-            "Download batch template CSV",
-            data=csv_bytes,
+            "Download batch template (CSV)",
+            data=template_bytes,
             file_name="home_credit_batch_template.csv",
             mime="text/csv",
         )
 
-        st.markdown("#### 2. Upload Filled CSV")
-        uploaded = st.file_uploader(
-            "Upload a CSV with the same columns as the template (no TARGET column).",
-            type=["csv"],
+        # --- File uploader ---
+        uploaded_file = st.file_uploader(
+            "Upload CSV with the same columns as the template", type=["csv"]
         )
 
-        if uploaded is not None:
-            try:
-                batch_df = pd.read_csv(uploaded)
-            except Exception as e:
-                st.error(f"Could not read uploaded CSV: {e}")
-                batch_df = None
+        if uploaded_file is not None:
+            batch_df = pd.read_csv(uploaded_file)
 
-            if batch_df is not None:
-                st.markdown("##### Preview of uploaded data")
-                st.dataframe(batch_df.head())
+            missing = set(feature_cols) - set(batch_df.columns)
+            extra = set(batch_df.columns) - set(feature_cols)
 
-                # align columns
-                # drop extra columns, add any missing ones as NaN
-                for c in batch_df.columns:
-                    if c not in feature_cols:
-                        st.warning(f"Dropping unexpected column: {c}")
-                batch_df = batch_df[[c for c in batch_df.columns if c in feature_cols]]
+            if missing:
+                st.error(f"The uploaded file is missing columns: {missing}")
+            else:
+                if extra:
+                    st.warning(
+                        f"Extra columns in file will be ignored: {extra}"
+                    )
+                    batch_df = batch_df[feature_cols]
 
-                missing = [c for c in feature_cols if c not in batch_df.columns]
-                for c in missing:
-                    batch_df[c] = np.nan
-                    st.warning(f"Adding missing column with NaN values: {c}")
+                probs = best_model.predict_proba(batch_df)[:, 1]
+                result_df = batch_df.copy()
+                result_df["default_probability"] = probs
 
-                batch_df = batch_df[feature_cols]
+                st.markdown("#### Preview of scored file")
+                st.dataframe(result_df.head())
 
-                if st.button("Run Batch Prediction"):
-                    # basic fill (same idea as training)
-                    num_cols = batch_df.select_dtypes(include=["number"]).columns
-                    cat_cols = batch_df.select_dtypes(exclude=["number"]).columns
-                    batch_df[num_cols] = batch_df[num_cols].fillna(0)
-                    batch_df[cat_cols] = batch_df[cat_cols].fillna("Unknown")
-
-                    try:
-                        probs = best_model.predict_proba(batch_df)[:, 1]
-                        result = batch_df.copy()
-                        result["default_probability"] = probs
-
-                        st.markdown("##### Sample of Scored Applicants")
-                        st.dataframe(result.head())
-
-                        out_csv = result.to_csv(index=False).encode("utf-8")
-                        st.download_button(
-                            "Download results as CSV",
-                            data=out_csv,
-                            file_name="home_credit_batch_scored.csv",
-                            mime="text/csv",
-                        )
-                    except Exception as e:
-                        st.error(f"Could not run batch prediction: {e}")
+                out_bytes = result_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download results as CSV",
+                    data=out_bytes,
+                    file_name="home_credit_batch_scored.csv",
+                    mime="text/csv",
+                )
