@@ -108,11 +108,10 @@ def train_home_models(df: pd.DataFrame):
 
     Returns a dictionary containing:
     - models: dict[model_name -> trained pipeline]
-    - metrics_df: DataFrame with ROC AUC, Accuracy, Precision, Recall, F1
+    - summary: DataFrame with ROC AUC, Accuracy, Precision, Recall, F1
     - best_name: name of best model by ROC AUC
     - best_model: the trained pipeline of the best model
-    - feature_cols: list of feature columns used
-    - target_col: name of target column
+    - X_test, y_test: validation split used for evaluation
     """
     from sklearn.model_selection import train_test_split
     from sklearn.compose import ColumnTransformer
@@ -128,6 +127,7 @@ def train_home_models(df: pd.DataFrame):
         f1_score,
     )
 
+    # Try to import XGBoost
     try:
         from xgboost import XGBClassifier
         HAS_XGB = True
@@ -140,9 +140,8 @@ def train_home_models(df: pd.DataFrame):
         st.error(f"Target column '{target_col}' not found in dataset.")
         return None
 
-    # Drop obvious ID-like columns if present
+    # Drop obvious ID columns if they exist
     drop_cols = [c for c in ["SK_ID_CURR", "SK_ID_BUREAU", "SK_ID_PREV"] if c in df.columns]
-
     df_model = df.drop(columns=drop_cols, errors="ignore").copy()
 
     # Separate X, y
@@ -153,11 +152,8 @@ def train_home_models(df: pd.DataFrame):
     cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
     num_cols = X.select_dtypes(include=["number", "float", "int"]).columns.tolist()
 
-    # Just in case something weird happens
-    feature_cols = num_cols + cat_cols
-
     # Train/validation split
-    X_train, X_val, y_train, y_val = train_test_split(
+    X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.25, random_state=42, stratify=y
     )
 
@@ -213,15 +209,15 @@ def train_home_models(df: pd.DataFrame):
         )
         pipe.fit(X_train, y_train)
 
-        # Probabilities & predictions
-        proba_val = pipe.predict_proba(X_val)[:, 1]
-        pred_val = (proba_val >= 0.5).astype(int)
+        # Probabilities & predictions for validation set
+        proba = pipe.predict_proba(X_test)[:, 1]
+        pred = (proba >= 0.5).astype(int)
 
-        roc_auc = roc_auc_score(y_val, proba_val)
-        acc = accuracy_score(y_val, pred_val)
-        prec = precision_score(y_val, pred_val, zero_division=0)
-        rec = recall_score(y_val, pred_val)
-        f1 = f1_score(y_val, pred_val)
+        roc_auc = roc_auc_score(y_test, proba)
+        acc = accuracy_score(y_test, pred)
+        prec = precision_score(y_test, pred, zero_division=0)
+        rec = recall_score(y_test, pred)
+        f1 = f1_score(y_test, pred)
 
         rows.append(
             {
@@ -234,7 +230,7 @@ def train_home_models(df: pd.DataFrame):
             }
         )
 
-        models[name] = pipe  # 👈 store trained pipeline
+        models[name] = pipe  # store the trained model
 
     metrics_df = pd.DataFrame(rows).set_index("Model").sort_values(
         by="ROC_AUC", ascending=False
@@ -244,12 +240,12 @@ def train_home_models(df: pd.DataFrame):
     best_model = models[best_name]
 
     return {
-        "models": models,          # 👈 this fixes your KeyError
-        "metrics_df": metrics_df,
+        "models": models,
+        "summary": metrics_df,  # 👈 matches your tab3 code
         "best_name": best_name,
         "best_model": best_model,
-        "feature_cols": feature_cols,
-        "target_col": target_col,
+        "X_test": X_test,
+        "y_test": y_test,
     }
 # --------------------------------------------------------------------
 # MAIN APP
