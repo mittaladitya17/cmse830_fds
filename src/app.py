@@ -552,7 +552,7 @@ Higher **ROC AUC** indicates a model that better separates default vs. non-defau
 """
         )
 
-        st.dataframe(metrics_df.style.format("{:.3f}"))
+        st.dataframe(metrics_df.round(3))
 
         # Choose model for confusion matrix
         model_name = st.selectbox("Select a model to inspect", metrics_df.index.tolist())
