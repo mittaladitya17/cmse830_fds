@@ -98,19 +98,19 @@ Using the German Credit model:
  - A pre-formatted template CSV is provided in the app.
 
 ### Tech Stack
- - Component	Technology
- - Web App	Streamlit
- - ML Models	scikit-learn, XGBoost
- - Data Processing	Pandas, NumPy
- - Visualization	Plotly, Matplotlib
- - Pipeline Caching	Streamlit cache
- - Deployment	Streamlit Cloud
+  - Python – Core programming language
+  - Streamlit – Interactive web dashboard framework
+  - Scikit-learn – Machine learning models & preprocessing
+  - XGBoost – Gradient-boosted tree modeling
+  - Pandas / NumPy – Data cleaning & transformation
+  - Plotly – Interactive EDA visualizations
+  - Joblib – Model serialization and loading
 
 ### Current Status
  - This is the final, full version of the project, incorporating:
- - A richer dataset (Home Credit sample)
- - Multiple ML models
- - Full-featured Streamlit application
- - Interactive EDA
- - Batch & single scoring
- - Well-documented pipeline
+   - A richer dataset (Home Credit sample)
+   - Multiple ML models
+   - Full-featured Streamlit application
+   - Interactive EDA
+   - Batch & single scoring
+   - Well-documented pipeline
