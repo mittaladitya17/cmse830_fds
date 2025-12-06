@@ -334,7 +334,7 @@ I use this dataset for:
 - Interactive **single applicant** prediction
 - **Batch** CSV scoring demo
 
-**2. Home Credit Sample (application_train_sample.csv)**  
+**2. Home Credit Sample (home_credit_sample.csv)**  
 A cut-down version of the large Kaggle Home Credit dataset.  
 It has:
 
@@ -371,21 +371,20 @@ For **German Credit**, I reuse the trained logistic regression pipeline from the
 
 ###  App Navigation
 
-- ** EDA & Data Understanding**  
+- **EDA & Data Understanding**  
   Explore distributions, correlations, and missing data for both datasets.
 
-- ** Models & Metrics (Home Credit)**  
+- **Models & Metrics (Home Credit)**  
   Compare Logistic Regression, Random Forest, and XGBoost on the Home Credit sample.  
   Inspect confusion matrices and full classification reports.
 
-- ** Single Applicant (German Credit)**  
+- **Single Applicant (German Credit)**  
   Manually enter features and get a predicted default probability.
 
-- ** Batch Scoring (German Credit)**  
+- **Batch Scoring (German Credit)**  
   Upload a CSV file and get risk scores for many applicants at once.
 """
     )
-
 
     st.markdown("---")
 
@@ -702,10 +701,7 @@ For all other features, the app will automatically use typical/median values fro
 # ------------------------------------------------------------------------------
 #  TAB 5 – BATCH SCORING
 # ------------------------------------------------------------------------------
-    
-# ================================
-# TAB 5 – BATCH SCORING
-# ================================
+
 with tabs[4]:
     st.subheader("Batch Scoring (Upload Multiple Applicants)")
 
@@ -715,13 +711,8 @@ with tabs[4]:
             "so batch scoring is disabled."
         )
     else:
-        # --- Create a template CSV from the Home Credit sample ---
         # Use the same feature set the models were trained on
-        if "X_train" in home_result:
-            feature_cols = home_result["X_train"].columns.tolist()
-        else:
-            # Fallback: all columns except the target
-            feature_cols = [c for c in home_df.columns if c != target_col]
+        feature_cols = home_result["feature_cols"]
 
         # Take first 5 rows as an example template
         template_df = home_df[feature_cols].head(5)
@@ -739,7 +730,7 @@ with tabs[4]:
         st.download_button(
             label="⬇️ Download batch template (Home Credit features)",
             data=template_csv_bytes,
-            file_name="batch_template_home_credit.csv",
+            file_name="home_credit_batch_template.csv",
             mime="text/csv",
             key="batch_template_main",
         )
@@ -749,7 +740,7 @@ with tabs[4]:
         st.sidebar.download_button(
             label="Download batch CSV template",
             data=template_csv_bytes,
-            file_name="batch_template_home_credit.csv",
+            file_name="home_credit_batch_template.csv",
             mime="text/csv",
             key="batch_template_sidebar",
         )
@@ -778,9 +769,7 @@ with tabs[4]:
                     )
                 else:
                     # Use the best model from Model Performance
-                    summary = home_result["summary"]
-                    best_model_name = summary["roc_auc"].idxmax()
-                    best_model = home_result["models"][best_model_name]
+                    best_model = home_result["best_model"]
 
                     X_batch = batch_df[feature_cols]
                     probs = best_model.predict_proba(X_batch)[:, 1]
@@ -796,7 +785,7 @@ with tabs[4]:
                     st.download_button(
                         label="⬇️ Download scored CSV (with default probabilities)",
                         data=scored_csv_bytes,
-                        file_name="batch_scored_home_credit.csv",
+                        file_name="home_credit_batch.csv",   # <-- requested name
                         mime="text/csv",
                         key="batch_scored_download",
                     )
