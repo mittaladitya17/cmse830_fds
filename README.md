@@ -39,10 +39,10 @@ A subset extracted from the massive Kaggle Home Credit Default Risk dataset.
 
 ### Workflow Summary
 1. Initial Data Analysis (IDA)
- - Inspect structure, datatypes, shapes
- - Handle missing values & anomalies
- - Remove ID columns (SK_ID_CURR, etc.)
- - Explore balance of target variable
+  - Inspect structure, datatypes, shapes
+  - Handle missing values & anomalies
+  - Remove ID columns (SK_ID_CURR, etc.)
+  - Explore balance of target variable
 
 2. Exploratory Data Analysis (EDA)
 Interactive Streamlit visualizations including:
