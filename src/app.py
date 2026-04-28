@@ -432,10 +432,10 @@ st.markdown("""
             border-radius: 16px; padding: 2rem 2.5rem; margin-bottom: 1.5rem;
             border-bottom: 3px solid #4fc3f7;">
     <h1 style="color: #ffffff; margin: 0; font-size: 2rem; font-weight: 800;">
-         Credit Risk Intelligence Dashboard
+        Credit Risk Intelligence Dashboard
     </h1>
     <p style="color: #94a3b8; margin: 0.5rem 0 0 0; font-size: 1rem;">
-        End-to-end ML pipeline · XGBoost · SHAP Explainability · Home Credit Dataset
+        End-to-end ML pipeline &nbsp;·&nbsp; XGBoost &nbsp;·&nbsp; SHAP Explainability &nbsp;·&nbsp; Home Credit Dataset
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -489,13 +489,14 @@ This dashboard answers that question with a full production-grade ML pipeline:
     st.markdown('<div class="section-header">Pipeline Architecture</div>', unsafe_allow_html=True)
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    for col, step in zip(
+    for col, step, icon in zip(
         [col1, col2, col3, col4, col5],
         ["Raw Data", "Preprocessing", "Model Training", "Evaluation", "Explanation"],
+        ["01", "02", "03", "04", "05"]
     ):
         col.markdown(f"""
 <div style="background:#1e3a5f; border-radius:10px; padding:1rem; text-align:center;">
-    <div style="font-size:1.8rem">{icon}</div>
+    <div style="font-size:1.4rem; font-weight:700; color:#4fc3f7">{icon}</div>
     <div style="color:#e2e8f0; font-weight:600; font-size:0.85rem; margin-top:0.3rem">{step}</div>
 </div>""", unsafe_allow_html=True)
 
@@ -524,9 +525,9 @@ with tabs[1]:
         if "TARGET" in df_plot.columns:
             vc = df_plot["TARGET"].value_counts().reset_index()
             vc.columns = ["TARGET", "count"]
-            vc["label"] = vc["TARGET"].map({0: "Non-Default ✅", 1: "Default ❌"})
+            vc["label"] = vc["TARGET"].map({0: "Non-Default", 1: "Default"})
             fig = px.bar(vc, x="label", y="count", color="label",
-                        color_discrete_map={"Non-Default ✅": "#4ade80", "Default ❌": "#f87171"},
+                        color_discrete_map={"Non-Default": "#4ade80", "Default": "#f87171"},
                         text="count", title="Class Distribution")
             fig.update_layout(plot_bgcolor="#0f172a", paper_bgcolor="#0f172a",
                             font=dict(color="#e2e8f0"), showlegend=False)
@@ -581,7 +582,7 @@ with tabs[2]:
         metrics_df = home_result["metrics"]
         best_name = home_result["best_name"]
 
-        st.success(f" Best model by ROC-AUC: **{best_name}**")
+        st.success(f"Best model by ROC-AUC: **{best_name}**")
 
         # Metrics table with highlighting
         st.dataframe(metrics_df.style.highlight_max(axis=0, color="#14532d").format("{:.3f}"),
@@ -637,7 +638,7 @@ with tabs[2]:
         )
         st.plotly_chart(fig_roc, use_container_width=True)
 
-        with st.expander(" Full Classification Report"):
+        with st.expander("Full Classification Report"):
             y_pred_best = home_result["best_model"].predict(home_result["X_test"])
             st.text(classification_report(home_result["y_test"], y_pred_best, digits=3))
 
@@ -656,30 +657,102 @@ with tabs[3]:
         feature_cols = home_result["feature_cols"]
         num_pick, cat_pick = pick_single_input_features(home_df)
 
-        st.markdown("Fill in the applicant details below. All other features default to dataset medians.")
+        st.markdown("Fill in the applicant details below. All other features default to dataset medians automatically.")
+
+        # ── Helper: detect which columns are "integer-like" in the dataset ──
+        def is_integer_col(series):
+            clean = series.dropna()
+            if len(clean) == 0:
+                return False
+            return (clean == clean.round()).all() and clean.abs().max() < 1e9
+
+        # Columns that are stored as days-since-birth / days-employed — show date pickers instead
+        DATE_COLS = {"DAYS_BIRTH", "DAYS_EMPLOYED", "DAYS_REGISTRATION",
+                     "DAYS_ID_PUBLISH", "DAYS_LAST_PHONE_CHANGE"}
+
+        # Columns that must be non-negative whole numbers (counts)
+        COUNT_COLS = {"CNT_CHILDREN", "CNT_FAM_MEMBERS", "AMT_REQ_CREDIT_BUREAU_HOUR",
+                      "AMT_REQ_CREDIT_BUREAU_DAY", "AMT_REQ_CREDIT_BUREAU_WEEK",
+                      "AMT_REQ_CREDIT_BUREAU_MON", "AMT_REQ_CREDIT_BUREAU_QRT",
+                      "AMT_REQ_CREDIT_BUREAU_YEAR"}
+
+        import datetime
 
         with st.form("single_applicant_form"):
             col_left, col_right = st.columns(2)
             input_data = {}
 
             with col_left:
-                st.markdown("**Numeric Features**")
+                st.markdown("**Applicant Details**")
                 for col in num_pick:
                     series = home_df[col]
                     median_val = float(series.median()) if series.notna().any() else 0.0
-                    min_val = float(series.min()) if series.notna().any() else median_val * 0.5
-                    max_val = float(series.max()) if series.notna().any() else median_val * 1.5
-                    val = st.number_input(col, value=median_val, min_value=min_val, max_value=max_val,
-                                        step=max((max_val - min_val) / 1000.0, 1e-3))
-                    input_data[col] = val
+                    min_val = float(series.min()) if series.notna().any() else 0.0
+                    max_val = float(series.max()) if series.notna().any() else median_val * 2
+
+                    # Clean label — replace underscores, title case
+                    label = col.replace("_", " ").title()
+
+                    if col.upper() in DATE_COLS:
+                        # Show a date picker — convert to days automatically
+                        if col.upper() == "DAYS_BIRTH":
+                            label = "Date of Birth"
+                            default_date = datetime.date.today() - datetime.timedelta(days=abs(int(median_val)))
+                            chosen_date = st.date_input(label, value=default_date,
+                                                        min_value=datetime.date(1940, 1, 1),
+                                                        max_value=datetime.date.today())
+                            days_val = (chosen_date - datetime.date.today()).days  # negative
+                            input_data[col] = float(days_val)
+
+                        elif col.upper() == "DAYS_EMPLOYED":
+                            label = "Employment Start Date"
+                            # positive median_val means pensioner quirk — default to 3 years ago
+                            default_emp = datetime.date.today() - datetime.timedelta(days=365 * 3)
+                            chosen_emp = st.date_input(label, value=default_emp,
+                                                       min_value=datetime.date(1980, 1, 1),
+                                                       max_value=datetime.date.today())
+                            emp_days = (chosen_emp - datetime.date.today()).days  # negative
+                            input_data[col] = float(emp_days)
+
+                        else:
+                            # Generic days column — keep number input but as integer
+                            int_default = int(round(median_val))
+                            val = st.number_input(label, value=int_default,
+                                                  min_value=int(round(min_val)),
+                                                  max_value=int(round(max_val)),
+                                                  step=1)
+                            input_data[col] = float(val)
+
+                    elif col.upper() in COUNT_COLS or is_integer_col(series):
+                        # Integer input — no decimals
+                        int_default = max(0, int(round(median_val)))
+                        int_min = max(0, int(round(min_val)))
+                        int_max = int(round(max_val))
+                        val = st.number_input(label, value=int_default,
+                                              min_value=int_min,
+                                              max_value=int_max,
+                                              step=1)
+                        input_data[col] = float(val)
+
+                    else:
+                        # Continuous numeric — keep decimals but sensible step
+                        step_val = round((max_val - min_val) / 1000.0, 2)
+                        step_val = max(step_val, 0.01)
+                        val = st.number_input(label, value=round(median_val, 2),
+                                              min_value=round(min_val, 2),
+                                              max_value=round(max_val, 2),
+                                              step=step_val,
+                                              format="%.2f")
+                        input_data[col] = val
 
             with col_right:
-                st.markdown("**Categorical Features**")
+                st.markdown("**Loan & Profile Details**")
                 for col in cat_pick:
                     series = home_df[col].dropna()
-                    options = ["(missing)"] + (series.value_counts().index.tolist()[:20] if not series.empty else [])
-                    choice = st.selectbox(col, options)
-                    input_data[col] = None if choice == "(missing)" else choice
+                    label = col.replace("_", " ").title()
+                    options = ["(not specified)"] + (series.value_counts().index.tolist()[:20] if not series.empty else [])
+                    choice = st.selectbox(label, options)
+                    input_data[col] = None if choice == "(not specified)" else choice
 
             submitted = st.form_submit_button("Score Applicant", use_container_width=True)
 
@@ -726,8 +799,8 @@ with tabs[3]:
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # SHAP Waterfall for this prediction
-            st.markdown('<div class="section-header"> Why this score? — SHAP Explanation</div>', unsafe_allow_html=True)
+            # SHAP Waterfall
+            st.markdown('<div class="section-header">Why this score? — SHAP Explanation</div>', unsafe_allow_html=True)
 
             if HAS_SHAP:
                 with st.spinner("Computing SHAP values..."):
@@ -737,19 +810,19 @@ with tabs[3]:
                     fig_wf = plot_waterfall(sv, feat_names, base_val, prob, top_n=10)
                     st.plotly_chart(fig_wf, use_container_width=True)
 
-                    # Top 3 drivers in plain English
                     df_sv = pd.DataFrame({"feature": feat_names, "shap": sv})
                     df_sv["abs"] = df_sv["shap"].abs()
                     top3 = df_sv.nlargest(3, "abs")
 
-                    st.markdown("**Top 3 drivers for this prediction:**")
+                    st.markdown("**Top 3 factors driving this prediction:**")
                     for _, r in top3.iterrows():
-                        direction = " increased" if r["shap"] > 0 else " decreased"
-                        st.markdown(f"- **{r['feature']}** {direction} default risk by `{r['shap']:+.3f}`")
+                        direction = "increased" if r["shap"] > 0 else "decreased"
+                        arrow = "↑" if r["shap"] > 0 else "↓"
+                        st.markdown(f"- **{r['feature']}** {arrow} {direction} default risk by `{r['shap']:+.3f}`")
                 else:
                     st.info("SHAP explanation unavailable for this prediction.")
             else:
-                st.info("Install `shap` package to enable prediction explanations.")
+                st.info("Install the shap package to enable prediction explanations.")
 
 
 # ------------------------------------------------------------------------------
@@ -771,7 +844,7 @@ with tabs[4]:
 2. Fill in one row per applicant
 3. Upload to get default probabilities for all applicants
 """)
-        st.download_button(" Download batch template", data=template_csv,
+        st.download_button("Download batch template", data=template_csv,
                           file_name="batch_template.csv", mime="text/csv")
 
         uploaded = st.file_uploader("Upload completed CSV", type="csv")
@@ -802,7 +875,7 @@ with tabs[4]:
                     st.plotly_chart(fig, use_container_width=True)
 
                     st.dataframe(result_df.head(20), use_container_width=True)
-                    st.download_button("⬇️ Download scored CSV",
+                    st.download_button("Download scored CSV",
                                       data=result_df.to_csv(index=False).encode("utf-8"),
                                       file_name="scored_applicants.csv", mime="text/csv")
             except Exception as e:
@@ -814,7 +887,7 @@ with tabs[4]:
 # ------------------------------------------------------------------------------
 
 with tabs[5]:
-    st.markdown('<div class="section-header"> SHAP Explainability — Global Model Insights</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">SHAP Explainability — Global Model Insights</div>', unsafe_allow_html=True)
 
     if home_result is None:
         st.warning("Models not available.")
@@ -876,18 +949,18 @@ with tabs[5]:
         with col1:
             st.markdown("""
 <div style="background:#1e3a5f; border-radius:10px; padding:1rem;">
-<h4 style="color:#4ade80">🟢 Negative SHAP</h4>
+<h4 style="color:#4ade80">Negative SHAP</h4>
 <p style="color:#e2e8f0; font-size:0.9rem">Feature pushed prediction <b>away from default</b>. Good sign for the applicant.</p>
 </div>""", unsafe_allow_html=True)
         with col2:
             st.markdown("""
 <div style="background:#1e3a5f; border-radius:10px; padding:1rem;">
-<h4 style="color:#f87171">🔴 Positive SHAP</h4>
+<h4 style="color:#f87171">Positive SHAP</h4>
 <p style="color:#e2e8f0; font-size:0.9rem">Feature pushed prediction <b>toward default</b>. Risk factor for the applicant.</p>
 </div>""", unsafe_allow_html=True)
         with col3:
             st.markdown("""
 <div style="background:#1e3a5f; border-radius:10px; padding:1rem;">
-<h4 style="color:#4fc3f7"> Bar Height</h4>
-<p style="color:#e2e8f0; font-size:0.9rem">Average absolute impact across all applicants. Taller = more important globally.</p>
+<h4 style="color:#4fc3f7">Bar Length</h4>
+<p style="color:#e2e8f0; font-size:0.9rem">Average absolute impact across all applicants. Longer = more important globally.</p>
 </div>""", unsafe_allow_html=True)
