@@ -9,6 +9,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg")
 
 import plotly.express as px
 import plotly.graph_objects as go
@@ -29,37 +32,89 @@ from sklearn.metrics import (
     roc_auc_score,
     confusion_matrix,
     classification_report,
+    roc_curve,
 )
 
-# Try to import XGBoost; if not available we just skip it
 try:
     from xgboost import XGBClassifier
     HAS_XGB = True
 except Exception:
     HAS_XGB = False
 
+try:
+    import shap
+    HAS_SHAP = True
+except Exception:
+    HAS_SHAP = False
+
 
 # ------------------------------------------------------------------------------
-#  BASIC CONFIG
+#  CONFIG & STYLING
 # ------------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Credit Risk Scoring Dashboard",
+    page_title="Credit Risk Intelligence Dashboard",
     page_icon="💳",
     layout="wide",
 )
 
-st.markdown(
-    """
+st.markdown("""
 <style>
-.block-container {
-    padding-top: 1rem;
-    padding-bottom: 1rem;
+.block-container { padding-top: 1.2rem; padding-bottom: 1rem; }
+
+.metric-card {
+    background: linear-gradient(135deg, #1e3a5f 0%, #16213e 100%);
+    border-radius: 12px;
+    padding: 1.2rem 1.5rem;
+    border-left: 4px solid #4fc3f7;
+    margin-bottom: 0.5rem;
+}
+.metric-card h3 { color: #4fc3f7; font-size: 0.85rem; margin: 0; font-weight: 500; letter-spacing: 0.05em; }
+.metric-card h1 { color: #ffffff; font-size: 2rem; margin: 0.2rem 0 0 0; font-weight: 700; }
+
+.risk-high {
+    background: linear-gradient(135deg, #7f1d1d, #450a0a);
+    border-left: 4px solid #f87171;
+    border-radius: 12px;
+    padding: 1.5rem;
+    text-align: center;
+}
+.risk-medium {
+    background: linear-gradient(135deg, #78350f, #451a03);
+    border-left: 4px solid #fbbf24;
+    border-radius: 12px;
+    padding: 1.5rem;
+    text-align: center;
+}
+.risk-low {
+    background: linear-gradient(135deg, #14532d, #052e16);
+    border-left: 4px solid #4ade80;
+    border-radius: 12px;
+    padding: 1.5rem;
+    text-align: center;
+}
+.risk-label { font-size: 0.8rem; color: #94a3b8; letter-spacing: 0.1em; margin-bottom: 0.3rem; }
+.risk-value { font-size: 3rem; font-weight: 800; color: white; line-height: 1; }
+.risk-tag { font-size: 1rem; font-weight: 600; margin-top: 0.5rem; }
+
+.section-header {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #4fc3f7;
+    border-bottom: 1px solid #1e3a5f;
+    padding-bottom: 0.4rem;
+    margin-bottom: 1rem;
+}
+
+.shap-box {
+    background: #0f172a;
+    border: 1px solid #1e3a5f;
+    border-radius: 12px;
+    padding: 1.2rem;
+    margin-top: 1rem;
 }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------------------------
@@ -68,11 +123,6 @@ st.markdown(
 
 @st.cache_data
 def load_home_credit():
-    """
-    Load the Home Credit *sample* dataset from the data folder.
-    We assume the file is named 'home_credit_sample.csv' and
-    contains a binary target column called 'TARGET'.
-    """
     data_path = Path(__file__).resolve().parents[1] / "data" / "home_credit_sample.csv"
     if not data_path.exists():
         return None, f"Could not find file at: {data_path}"
@@ -81,146 +131,128 @@ def load_home_credit():
 
 
 # ------------------------------------------------------------------------------
-#  MODEL TRAINING FUNCTION
+#  MODEL TRAINING
 # ------------------------------------------------------------------------------
 
-@st.cache_resource(show_spinner=True)
+@st.cache_resource(show_spinner="Training models — hang tight...")
 def train_home_models(df: pd.DataFrame):
-    """
-    Train several models (LogReg, RandomForest, XGBoost if available)
-    on the Home Credit sample dataset.
-
-    Returns a dictionary with:
-        - metrics: DataFrame of performance metrics
-        - models: dict of trained pipelines
-        - best_model: pipeline with best ROC AUC
-        - best_name: name of best model
-        - X_test, y_test: hold-out test set
-        - feature_cols, num_cols, cat_cols: schema info
-    """
     df = df.copy()
-
     if "TARGET" not in df.columns:
         raise ValueError("Expected column 'TARGET' in home_credit_sample.csv.")
 
-    # Drop obvious ID columns if present
     id_cols = [c for c in df.columns if c.upper().startswith("SK_ID")]
     df = df.drop(columns=id_cols, errors="ignore")
 
     y = df["TARGET"].astype(int)
     X = df.drop(columns=["TARGET"])
 
-    # Split by type
     cat_cols = X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
     num_cols = X.select_dtypes(include=["number"]).columns.tolist()
 
-    # Preprocessing pipelines with imputation (this fixes the NaN errors)
-    num_pipe = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-        ]
-    )
+    num_pipe = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+    cat_pipe = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+    ])
+    preprocessor = ColumnTransformer(transformers=[
+        ("num", num_pipe, num_cols),
+        ("cat", cat_pipe, cat_cols),
+    ])
 
-    cat_pipe = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("onehot", OneHotEncoder(handle_unknown="ignore")),
-        ]
-    )
-
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("num", num_pipe, num_cols),
-            ("cat", cat_pipe, cat_cols),
-        ]
-    )
-
-    # Train / test split
     X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.25,
-        random_state=42,
+        X, y, test_size=0.25, random_state=42,
         stratify=y if y.nunique() == 2 else None,
     )
 
     models = {}
 
-    # Logistic Regression
-    pipe_lr = Pipeline(
-        steps=[
-            ("pre", preprocessor),
-            ("clf", LogisticRegression(max_iter=1000, class_weight="balanced")),
-        ]
-    )
+    pipe_lr = Pipeline(steps=[
+        ("pre", preprocessor),
+        ("clf", LogisticRegression(max_iter=1000, class_weight="balanced")),
+    ])
     pipe_lr.fit(X_train, y_train)
     models["Logistic Regression"] = pipe_lr
 
-    # Random Forest
-    pipe_rf = Pipeline(
-        steps=[
-            ("pre", preprocessor),
-            (
-                "clf",
-                RandomForestClassifier(
-                    n_estimators=300,
-                    random_state=42,
-                    n_jobs=-1,
-                    class_weight="balanced_subsample",
-                ),
-            ),
-        ]
-    )
+    pipe_rf = Pipeline(steps=[
+        ("pre", preprocessor),
+        ("clf", RandomForestClassifier(
+            n_estimators=300, random_state=42, n_jobs=-1,
+            class_weight="balanced_subsample",
+        )),
+    ])
     pipe_rf.fit(X_train, y_train)
     models["Random Forest"] = pipe_rf
 
-    # XGBoost (if available)
     if HAS_XGB:
-        pipe_xgb = Pipeline(
-            steps=[
-                ("pre", preprocessor),
-                (
-                    "clf",
-                    XGBClassifier(
-                        n_estimators=400,
-                        learning_rate=0.05,
-                        max_depth=4,
-                        subsample=0.8,
-                        colsample_bytree=0.8,
-                        objective="binary:logistic",
-                        eval_metric="logloss",
-                        n_jobs=-1,
-                        random_state=42,
-                    ),
-                ),
-            ]
-        )
+        pipe_xgb = Pipeline(steps=[
+            ("pre", preprocessor),
+            ("clf", XGBClassifier(
+                n_estimators=400, learning_rate=0.05, max_depth=4,
+                subsample=0.8, colsample_bytree=0.8,
+                objective="binary:logistic", eval_metric="logloss",
+                n_jobs=-1, random_state=42,
+            )),
+        ])
         pipe_xgb.fit(X_train, y_train)
         models["XGBoost"] = pipe_xgb
 
-    # Compute metrics on test set
     rows = []
     for name, model in models.items():
         proba = model.predict_proba(X_test)[:, 1]
         preds = (proba >= 0.5).astype(int)
-        rows.append(
-            {
-                "model": name,
-                "accuracy": accuracy_score(y_test, preds),
-                "precision": precision_score(y_test, preds, zero_division=0),
-                "recall": recall_score(y_test, preds, zero_division=0),
-                "f1": f1_score(y_test, preds, zero_division=0),
-                "roc_auc": roc_auc_score(y_test, proba),
-            }
-        )
+        rows.append({
+            "model": name,
+            "accuracy": accuracy_score(y_test, preds),
+            "precision": precision_score(y_test, preds, zero_division=0),
+            "recall": recall_score(y_test, preds, zero_division=0),
+            "f1": f1_score(y_test, preds, zero_division=0),
+            "roc_auc": roc_auc_score(y_test, proba),
+        })
 
-    metrics_df = pd.DataFrame(rows).set_index("model").sort_values(
-        "roc_auc", ascending=False
-    )
-
+    metrics_df = pd.DataFrame(rows).set_index("model").sort_values("roc_auc", ascending=False)
     best_name = metrics_df["roc_auc"].idxmax()
     best_model = models[best_name]
+
+    # Pre-compute SHAP values for best model on test set (sample for speed)
+    shap_values = None
+    shap_sample = None
+    feature_names_out = None
+
+    if HAS_SHAP:
+        try:
+            pre = best_model.named_steps["pre"]
+            clf = best_model.named_steps["clf"]
+            X_test_transformed = pre.transform(X_test)
+
+            # Get feature names after preprocessing
+            try:
+                feature_names_out = pre.get_feature_names_out()
+            except Exception:
+                feature_names_out = [f"f{i}" for i in range(X_test_transformed.shape[1])]
+
+            # Sample up to 300 rows for speed
+            n_sample = min(300, X_test_transformed.shape[0])
+            idx = np.random.RandomState(42).choice(X_test_transformed.shape[0], n_sample, replace=False)
+            X_shap = X_test_transformed[idx]
+
+            if isinstance(X_shap, np.ndarray) is False:
+                X_shap = X_shap.toarray()
+
+            explainer = shap.TreeExplainer(clf) if HAS_XGB and isinstance(clf, XGBClassifier) else shap.Explainer(clf, X_shap)
+            shap_values = explainer.shap_values(X_shap)
+
+            # For binary classifiers, shap_values may be a list [class0, class1]
+            if isinstance(shap_values, list):
+                shap_values = shap_values[1]
+
+            shap_sample = X_shap
+
+        except Exception as e:
+            shap_values = None
+            shap_sample = None
 
     return {
         "metrics": metrics_df,
@@ -232,46 +264,150 @@ def train_home_models(df: pd.DataFrame):
         "feature_cols": X.columns.tolist(),
         "num_cols": num_cols,
         "cat_cols": cat_cols,
+        "shap_values": shap_values,
+        "shap_sample": shap_sample,
+        "feature_names_out": feature_names_out,
     }
 
 
 # ------------------------------------------------------------------------------
-#  HELPER FOR SINGLE-APPLICANT FEATURE SELECTION
+#  HELPER: SINGLE APPLICANT FEATURE SELECTION
 # ------------------------------------------------------------------------------
 
-def pick_single_input_features(df: pd.DataFrame, target_col: str = "TARGET"):
-    """
-    Pick a reasonable subset of numeric and categorical features
-    for the single-applicant form, so the UI is not overwhelming.
-
-    Strategy:
-      - Take top few numeric columns by non-null count
-      - Take top few categorical columns by non-null count
-    """
+def pick_single_input_features(df, target_col="TARGET"):
     df = df.drop(columns=[c for c in df.columns if c.upper().startswith("SK_ID")], errors="ignore")
-    if target_col in df.columns:
-        df_feat = df.drop(columns=[target_col])
-    else:
-        df_feat = df.copy()
+    df_feat = df.drop(columns=[target_col], errors="ignore")
 
     num_cols_all = df_feat.select_dtypes(include="number").columns.tolist()
     cat_cols_all = df_feat.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
 
-    # Helper to sort by non-null count
     def top_by_non_null(cols, k):
         if not cols:
             return []
         counts = df_feat[cols].notna().sum().sort_values(ascending=False)
         return [c for c in counts.index[:k]]
 
-    num_pick = top_by_non_null(num_cols_all, k=6)
-    cat_pick = top_by_non_null(cat_cols_all, k=4)
-
-    return num_pick, cat_pick
+    return top_by_non_null(num_cols_all, k=6), top_by_non_null(cat_cols_all, k=4)
 
 
 # ------------------------------------------------------------------------------
-#  LOAD DATA & TRAIN MODELS (ONCE)
+#  SHAP WATERFALL FOR SINGLE PREDICTION
+# ------------------------------------------------------------------------------
+
+def compute_single_shap(home_result, df_input):
+    """Compute SHAP values for a single input row."""
+    if not HAS_SHAP:
+        return None, None, None
+    try:
+        best_model = home_result["best_model"]
+        pre = best_model.named_steps["pre"]
+        clf = best_model.named_steps["clf"]
+
+        X_transformed = pre.transform(df_input)
+        if not isinstance(X_transformed, np.ndarray):
+            X_transformed = X_transformed.toarray()
+
+        try:
+            feature_names = pre.get_feature_names_out()
+        except Exception:
+            feature_names = [f"f{i}" for i in range(X_transformed.shape[1])]
+
+        if HAS_XGB and isinstance(clf, XGBClassifier):
+            explainer = shap.TreeExplainer(clf)
+        else:
+            bg = home_result.get("shap_sample")
+            explainer = shap.Explainer(clf, bg)
+
+        sv = explainer.shap_values(X_transformed)
+        if isinstance(sv, list):
+            sv = sv[1]
+
+        base_val = explainer.expected_value
+        if isinstance(base_val, (list, np.ndarray)):
+            base_val = base_val[1] if len(base_val) > 1 else base_val[0]
+
+        return sv[0], feature_names, float(base_val)
+    except Exception as e:
+        return None, None, None
+
+
+def plot_waterfall(shap_vals, feature_names, base_value, final_prob, top_n=10):
+    """Plot a clean waterfall chart using plotly."""
+    df_shap = pd.DataFrame({
+        "feature": feature_names,
+        "shap_value": shap_vals
+    })
+    df_shap["abs"] = df_shap["shap_value"].abs()
+    df_shap = df_shap.nlargest(top_n, "abs").sort_values("shap_value")
+
+    colors = ["#f87171" if v > 0 else "#4ade80" for v in df_shap["shap_value"]]
+
+    fig = go.Figure(go.Bar(
+        x=df_shap["shap_value"],
+        y=df_shap["feature"],
+        orientation="h",
+        marker_color=colors,
+        text=[f"{v:+.3f}" for v in df_shap["shap_value"]],
+        textposition="outside",
+    ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"SHAP Explanation — Why {final_prob:.1%} Default Probability?",
+            font=dict(size=15, color="#e2e8f0")
+        ),
+        xaxis_title="SHAP Value (impact on prediction)",
+        yaxis_title="",
+        plot_bgcolor="#0f172a",
+        paper_bgcolor="#0f172a",
+        font=dict(color="#e2e8f0"),
+        xaxis=dict(gridcolor="#1e3a5f", zerolinecolor="#4fc3f7", zerolinewidth=2),
+        yaxis=dict(gridcolor="#1e3a5f"),
+        height=420,
+        margin=dict(l=10, r=80, t=50, b=40),
+        showlegend=False,
+    )
+
+    # Add baseline annotation
+    fig.add_vline(x=0, line_color="#4fc3f7", line_width=1.5)
+    return fig
+
+
+def plot_shap_summary(shap_values, feature_names, top_n=15):
+    """Bar chart of global SHAP importance."""
+    mean_abs = np.abs(shap_values).mean(axis=0)
+    df_imp = pd.DataFrame({"feature": feature_names, "importance": mean_abs})
+    df_imp = df_imp.nlargest(top_n, "importance").sort_values("importance")
+
+    fig = go.Figure(go.Bar(
+        x=df_imp["importance"],
+        y=df_imp["feature"],
+        orientation="h",
+        marker=dict(
+            color=df_imp["importance"],
+            colorscale="Blues",
+            showscale=False,
+        ),
+        text=[f"{v:.3f}" for v in df_imp["importance"]],
+        textposition="outside",
+    ))
+
+    fig.update_layout(
+        title=dict(text="Global Feature Importance (Mean |SHAP|)", font=dict(size=15, color="#e2e8f0")),
+        xaxis_title="Mean Absolute SHAP Value",
+        plot_bgcolor="#0f172a",
+        paper_bgcolor="#0f172a",
+        font=dict(color="#e2e8f0"),
+        xaxis=dict(gridcolor="#1e3a5f"),
+        yaxis=dict(gridcolor="#1e3a5f"),
+        height=500,
+        margin=dict(l=10, r=80, t=50, b=40),
+    )
+    return fig
+
+
+# ------------------------------------------------------------------------------
+#  LOAD DATA & TRAIN
 # ------------------------------------------------------------------------------
 
 home_df, load_err = load_home_credit()
@@ -288,248 +424,147 @@ else:
 
 
 # ------------------------------------------------------------------------------
-#  UI LAYOUT
+#  HEADER
 # ------------------------------------------------------------------------------
 
-st.title("Credit Risk Scoring Dashboard")
+st.markdown("""
+<div style="background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+            border-radius: 16px; padding: 2rem 2.5rem; margin-bottom: 1.5rem;
+            border-bottom: 3px solid #4fc3f7;">
+    <h1 style="color: #ffffff; margin: 0; font-size: 2rem; font-weight: 800;">
+        💳 Credit Risk Intelligence Dashboard
+    </h1>
+    <p style="color: #94a3b8; margin: 0.5rem 0 0 0; font-size: 1rem;">
+        End-to-end ML pipeline · XGBoost · SHAP Explainability · Home Credit Dataset
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
-tabs = st.tabs(
-    [
-        "Project Overview",
-        "Exploratory Analysis",
-        "Model Performance",
-        "Single Applicant Scoring",
-        "Batch Scoring",
-    ]
-)
+# Top-level metrics
+if home_df is not None and home_result is not None:
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(f"""<div class="metric-card"><h3>DATASET ROWS</h3><h1>{home_df.shape[0]:,}</h1></div>""", unsafe_allow_html=True)
+    with c2:
+        st.markdown(f"""<div class="metric-card"><h3>FEATURES</h3><h1>{home_df.shape[1]-1}</h1></div>""", unsafe_allow_html=True)
+    with c3:
+        default_rate = home_df["TARGET"].mean() if "TARGET" in home_df.columns else 0
+        st.markdown(f"""<div class="metric-card"><h3>DEFAULT RATE</h3><h1>{default_rate:.1%}</h1></div>""", unsafe_allow_html=True)
+    with c4:
+        best_auc = home_result["metrics"]["roc_auc"].max()
+        st.markdown(f"""<div class="metric-card"><h3>BEST AUC-ROC</h3><h1>{best_auc:.3f}</h1></div>""", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
 
 # ------------------------------------------------------------------------------
-#  TAB 1 – PROJECT OVERVIEW
+#  TABS
 # ------------------------------------------------------------------------------
+
+tabs = st.tabs([
+    "📋 Overview",
+    "🔍 Exploratory Analysis",
+    "📊 Model Performance",
+    "🎯 Single Applicant Scoring",
+    "📦 Batch Scoring",
+    "🧠 SHAP Explainability",
+])
+
+
+# ------------------------------------------------------------------------------
+#  TAB 1 – OVERVIEW
+# ------------------------------------------------------------------------------
+
 with tabs[0]:
-    st.subheader("Project Overview")
-
-    st.markdown(
-        """
-### Problem Statement  
-
-Banks and lenders constantly need to answer the question:  
+    st.markdown('<div class="section-header">Problem Statement</div>', unsafe_allow_html=True)
+    st.markdown("""
 > **"If I give this person a loan, how likely are they to default?"**
 
-This app simulates a **credit risk scoring system**:
+This dashboard answers that question with a full production-grade ML pipeline:
+- **Individual scoring** — enter one applicant's details, get an instant risk score + explanation
+- **Batch scoring** — upload a CSV, score thousands of applicants at once
+- **Model comparison** — Logistic Regression vs Random Forest vs XGBoost
+- **SHAP explainability** — understand *why* the model made every single decision
+""")
 
-- For individual users (single prediction)
-- For groups of users (batch CSV scoring)
-- With model comparison on a more realistic, higher-dimensional dataset (Home Credit sample)
+    st.markdown('<div class="section-header">Pipeline Architecture</div>', unsafe_allow_html=True)
 
----
+    col1, col2, col3, col4, col5 = st.columns(5)
+    for col, step, icon in zip(
+        [col1, col2, col3, col4, col5],
+        ["Raw Data", "Preprocessing", "Model Training", "Evaluation", "Explanation"],
+        ["📥", "⚙️", "🤖", "📊", "🧠"]
+    ):
+        col.markdown(f"""
+<div style="background:#1e3a5f; border-radius:10px; padding:1rem; text-align:center;">
+    <div style="font-size:1.8rem">{icon}</div>
+    <div style="color:#e2e8f0; font-weight:600; font-size:0.85rem; margin-top:0.3rem">{step}</div>
+</div>""", unsafe_allow_html=True)
 
-###  Datasets Used
-
-**1. German Credit (credit-g.csv)**  
-Small, classic dataset (1000 rows) with mixed categorical and numeric features.  
-I use this dataset for:
-
-- A **clean, interpretable logistic regression model**
-- Interactive **single applicant** prediction
-- **Batch** CSV scoring demo
-
-**2. Home Credit Sample (home_credit_sample.csv)**  
-A cut-down version of the large Kaggle Home Credit dataset.  
-It has:
-
-- Many more features (dozens of socioeconomic + financial variables)
-- A binary target: `TARGET` (1 = default, 0 = repaid)
-- Missing values, skewed distributions, correlations — perfect for **EDA and model comparison**
-
----
-
-###  Pipeline & Modeling Summary
-
-For **Home Credit sample**, the ML pipeline does:
-
-- **Initial Data Analysis (IDA)**  
-  - Check structure: column types, target balance, missing values  
-  - Drop obvious IDs (e.g., `SK_ID_CURR`) that don’t help prediction
-
-- **Preprocessing**  
-  - Numeric features: median imputation + standardization  
-  - Categorical features: most frequent imputation + one-hot encoding  
-
-- **Models Compared**
-  - Logistic Regression (baseline linear model with class balancing)
-  - Random Forest (non-linear ensemble, handles interactions)
-  - XGBoost (if available in environment – strong gradient boosting model)
-
-For **German Credit**, I reuse the trained logistic regression pipeline from the midterm:
-
-- Encodes categorical variables using `OneHotEncoder`
-- Scales numerical variables
-- Outputs a **probability of default** for each applicant
-
----
-
-###  App Navigation
-
-- **EDA & Data Understanding**  
-  Explore distributions, correlations, and missing data for both datasets.
-
-- **Models & Metrics (Home Credit)**  
-  Compare Logistic Regression, Random Forest, and XGBoost on the Home Credit sample.  
-  Inspect confusion matrices and full classification reports.
-
-- **Single Applicant (German Credit)**  
-  Manually enter features and get a predicted default probability.
-
-- **Batch Scoring (German Credit)**  
-  Upload a CSV file and get risk scores for many applicants at once.
-"""
-    )
-
-    st.markdown("---")
-
-    st.markdown("### Dataset Summary (Home Credit Sample)")
-    if home_df is None:
-        st.error("Dataset could not be loaded. Check that `data/home_credit_sample.csv` exists.")
-        if train_err:
-            st.code(train_err)
-    else:
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            st.metric("Rows (sample)", f"{home_df.shape[0]:,}")
-        with col_b:
-            st.metric("Features", f"{home_df.shape[1] - 1:,}")  # minus TARGET
-        with col_c:
-            if "TARGET" in home_df.columns:
-                default_rate = home_df["TARGET"].mean()
-                st.metric("Default Rate (sample)", f"{default_rate:.1%}")
-            else:
-                st.metric("Default Rate", "N/A")
-
-        st.markdown("#### Example Rows")
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Dataset Sample</div>', unsafe_allow_html=True)
+    if home_df is not None:
         st.dataframe(home_df.head(), use_container_width=True)
-
-        st.markdown("#### Basic Statistics (Numeric Features)")
-        num_desc = home_df.select_dtypes(include="number").describe().T
-        st.dataframe(num_desc.round(2), use_container_width=True)
 
 
 # ------------------------------------------------------------------------------
-#  TAB 2 – EXPLORATORY ANALYSIS
+#  TAB 2 – EDA
 # ------------------------------------------------------------------------------
 
 with tabs[1]:
-    st.subheader("Exploratory Data Analysis (EDA)")
+    st.markdown('<div class="section-header">Exploratory Data Analysis</div>', unsafe_allow_html=True)
 
     if home_df is None:
-        st.warning("No data available for EDA.")
+        st.warning("No data available.")
     else:
-        # Drop IDs
         df_plot = home_df.drop(
             columns=[c for c in home_df.columns if c.upper().startswith("SK_ID")],
-            errors="ignore",
+            errors="ignore"
         )
 
-        st.markdown("### 2.1 Target Distribution")
+        st.markdown("#### Target Distribution")
         if "TARGET" in df_plot.columns:
-            fig = px.histogram(
-                df_plot,
-                x="TARGET",
-                nbins=2,
-                text_auto=True,
-                title="Distribution of Target (0 = Non-default, 1 = Default)",
-            )
-            fig.update_layout(bargap=0.2)
+            vc = df_plot["TARGET"].value_counts().reset_index()
+            vc.columns = ["TARGET", "count"]
+            vc["label"] = vc["TARGET"].map({0: "Non-Default ✅", 1: "Default ❌"})
+            fig = px.bar(vc, x="label", y="count", color="label",
+                        color_discrete_map={"Non-Default ✅": "#4ade80", "Default ❌": "#f87171"},
+                        text="count", title="Class Distribution")
+            fig.update_layout(plot_bgcolor="#0f172a", paper_bgcolor="#0f172a",
+                            font=dict(color="#e2e8f0"), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No TARGET column found – cannot show target distribution.")
 
         st.markdown("---")
-        st.markdown("### 2.2 Interactive Univariate Distribution")
+        num_cols_eda = [c for c in df_plot.select_dtypes(include="number").columns if c != "TARGET"]
 
-        # Choose a numeric feature
-        num_cols = df_plot.select_dtypes(include="number").columns.tolist()
-        if "TARGET" in num_cols:
-            num_cols.remove("TARGET")
-
-        if num_cols:
-            col1, col2 = st.columns(2)
-            with col1:
-                num_feature = st.selectbox(
-                    "Choose a numeric feature", num_cols, key="eda_num_feature"
-                )
-            with col2:
-                show_by_target = st.checkbox(
-                    "Color by TARGET (0/1)", value=True, key="eda_color_by_target"
-                )
-
-            if show_by_target and "TARGET" in df_plot.columns:
-                fig = px.histogram(
-                    df_plot,
-                    x=num_feature,
-                    color="TARGET",
-                    marginal="box",
-                    nbins=40,
-                    opacity=0.7,
-                    title=f"Distribution of {num_feature} by TARGET",
-                )
-            else:
-                fig = px.histogram(
-                    df_plot,
-                    x=num_feature,
-                    nbins=40,
-                    opacity=0.8,
-                    title=f"Distribution of {num_feature}",
-                )
-
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("#### Univariate Distribution")
+            num_feature = st.selectbox("Choose a numeric feature", num_cols_eda, key="eda_num")
+            fig = px.histogram(df_plot, x=num_feature, color="TARGET" if "TARGET" in df_plot.columns else None,
+                             marginal="box", nbins=40, opacity=0.75,
+                             title=f"Distribution of {num_feature}")
+            fig.update_layout(plot_bgcolor="#0f172a", paper_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No numeric features available for univariate analysis.")
+
+        with col2:
+            st.markdown("#### Bivariate vs Target")
+            feat_bi = st.selectbox("Feature vs TARGET", num_cols_eda, key="eda_bi")
+            fig = px.box(df_plot, x="TARGET", y=feat_bi, points="outliers",
+                        color="TARGET",
+                        color_discrete_map={0: "#4ade80", 1: "#f87171"},
+                        title=f"{feat_bi} by Default Status")
+            fig.update_layout(plot_bgcolor="#0f172a", paper_bgcolor="#0f172a",
+                            font=dict(color="#e2e8f0"), showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
-        st.markdown("### 2.3 Bivariate Relationship (Feature vs. Target)")
-
-        if ("TARGET" in df_plot.columns) and num_cols:
-            feat_bi = st.selectbox(
-                "Choose a numeric feature for relationship with TARGET",
-                num_cols,
-                key="eda_bi_feature",
-            )
-
-            fig = px.box(
-                df_plot,
-                x="TARGET",
-                y=feat_bi,
-                points="all",
-                title=f"{feat_bi} distribution by TARGET",
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Need TARGET and at least one numeric feature for bivariate analysis.")
-
-        st.markdown("---")
-        st.markdown("### 2.4 Correlation Heatmap (Numeric Subset)")
-
-        # For large feature sets, just take top 12 numeric columns by non-null count
-        num_cols_all = df_plot.select_dtypes(include="number").columns.tolist()
-        if "TARGET" in num_cols_all:
-            num_cols_all.remove("TARGET")
-
-        if len(num_cols_all) > 0:
-            non_null_counts = df_plot[num_cols_all].notna().sum().sort_values(ascending=False)
-            top_num = non_null_counts.index[: min(12, len(non_null_counts))]
-            corr = df_plot[top_num].corr()
-
-            fig = px.imshow(
-                corr,
-                text_auto=".2f",
-                aspect="auto",
-                color_continuous_scale="RdBu_r",
-                title="Correlation Heatmap (Top Numeric Features)",
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No numeric features for correlation heatmap.")
+        st.markdown("#### Correlation Heatmap")
+        top_num = df_plot[num_cols_eda].notna().sum().sort_values(ascending=False).index[:12]
+        corr = df_plot[top_num].corr()
+        fig = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu_r",
+                       title="Feature Correlation Matrix")
+        fig.update_layout(plot_bgcolor="#0f172a", paper_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+        st.plotly_chart(fig, use_container_width=True)
 
 
 # ------------------------------------------------------------------------------
@@ -537,53 +572,75 @@ with tabs[1]:
 # ------------------------------------------------------------------------------
 
 with tabs[2]:
-    st.subheader("Model Performance (Home Credit Sample)")
+    st.markdown('<div class="section-header">Model Comparison</div>', unsafe_allow_html=True)
 
     if home_result is None:
-        st.warning("Models are not available – check dataset or training error.")
+        st.warning("Models not available.")
         if train_err:
             st.code(train_err)
     else:
         metrics_df = home_result["metrics"]
         best_name = home_result["best_name"]
 
-        st.markdown(
-            """
-These models were trained on the Home Credit sample, using a **75% / 25% train–test split**.  
-All numeric features are **median-imputed + standardized**, while categorical features are **imputed + one-hot encoded**.
-"""
-        )
+        st.success(f"🏆 Best model by ROC-AUC: **{best_name}**")
 
-        st.markdown("### 3.1 Summary Metrics (Higher ROC AUC is Better)")
-        st.dataframe(metrics_df.round(3), use_container_width=True)
-
-        st.success(f"Best model on this sample (by ROC AUC): **{best_name}**")
+        # Metrics table with highlighting
+        st.dataframe(metrics_df.style.highlight_max(axis=0, color="#14532d").format("{:.3f}"),
+                    use_container_width=True)
 
         st.markdown("---")
-        st.markdown("### 3.2 Confusion Matrix for a Selected Model")
+        col1, col2 = st.columns(2)
 
-        model_name = st.selectbox(
-            "Choose model to inspect", metrics_df.index.tolist(), index=0
+        with col1:
+            st.markdown("#### ROC-AUC Comparison")
+            fig = px.bar(
+                metrics_df.reset_index(),
+                x="model", y="roc_auc",
+                color="roc_auc",
+                color_continuous_scale="Blues",
+                text=metrics_df["roc_auc"].round(3).values,
+                title="ROC-AUC by Model"
+            )
+            fig.update_layout(plot_bgcolor="#0f172a", paper_bgcolor="#0f172a",
+                            font=dict(color="#e2e8f0"), showlegend=False,
+                            yaxis=dict(range=[0.5, 1.0]))
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.markdown("#### Confusion Matrix")
+            model_name = st.selectbox("Select model", metrics_df.index.tolist())
+            model = home_result["models"][model_name]
+            y_pred = model.predict(home_result["X_test"])
+            cm = confusion_matrix(home_result["y_test"], y_pred, labels=[0, 1])
+            cm_df = pd.DataFrame(cm, index=["True: No Default", "True: Default"],
+                                columns=["Pred: No Default", "Pred: Default"])
+            fig = px.imshow(cm_df, text_auto=True, color_continuous_scale="Blues",
+                          title=f"Confusion Matrix — {model_name}")
+            fig.update_layout(plot_bgcolor="#0f172a", paper_bgcolor="#0f172a",
+                            font=dict(color="#e2e8f0"))
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("#### ROC Curves (All Models)")
+        fig_roc = go.Figure()
+        colors_roc = {"Logistic Regression": "#4fc3f7", "Random Forest": "#4ade80", "XGBoost": "#f87171"}
+        for name, model in home_result["models"].items():
+            proba = model.predict_proba(home_result["X_test"])[:, 1]
+            fpr, tpr, _ = roc_curve(home_result["y_test"], proba)
+            auc_val = roc_auc_score(home_result["y_test"], proba)
+            fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, name=f"{name} (AUC={auc_val:.3f})",
+                                        line=dict(color=colors_roc.get(name, "#ffffff"), width=2)))
+        fig_roc.add_trace(go.Scatter(x=[0,1], y=[0,1], name="Random", line=dict(dash="dash", color="#475569")))
+        fig_roc.update_layout(
+            title="ROC Curves", xaxis_title="False Positive Rate", yaxis_title="True Positive Rate",
+            plot_bgcolor="#0f172a", paper_bgcolor="#0f172a", font=dict(color="#e2e8f0"),
+            xaxis=dict(gridcolor="#1e3a5f"), yaxis=dict(gridcolor="#1e3a5f"), height=400
         )
-        model = home_result["models"][model_name]
-        X_test = home_result["X_test"]
-        y_test = home_result["y_test"]
+        st.plotly_chart(fig_roc, use_container_width=True)
 
-        y_pred = model.predict(X_test)
-        cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
-        cm_df = pd.DataFrame(cm, index=["True 0", "True 1"], columns=["Pred 0", "Pred 1"])
-
-        fig = px.imshow(
-            cm_df,
-            text_auto=True,
-            color_continuous_scale="Blues",
-            title=f"Confusion Matrix – {model_name}",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        with st.expander("Show classification report"):
-            report = classification_report(y_test, y_pred, digits=3)
-            st.text(report)
+        with st.expander("📋 Full Classification Report"):
+            y_pred_best = home_result["best_model"].predict(home_result["X_test"])
+            st.text(classification_report(home_result["y_test"], y_pred_best, digits=3))
 
 
 # ------------------------------------------------------------------------------
@@ -591,101 +648,109 @@ All numeric features are **median-imputed + standardized**, while categorical fe
 # ------------------------------------------------------------------------------
 
 with tabs[3]:
-    st.subheader("Single Applicant Scoring")
+    st.markdown('<div class="section-header">Single Applicant Risk Scoring</div>', unsafe_allow_html=True)
 
     if home_result is None or home_df is None:
-        st.warning("Models not available – cannot score single applicants.")
+        st.warning("Models not available.")
     else:
         best_model = home_result["best_model"]
         feature_cols = home_result["feature_cols"]
+        num_pick, cat_pick = pick_single_input_features(home_df)
 
-        # Choose a small subset of features for easier UI
-        num_pick, cat_pick = pick_single_input_features(home_df, target_col="TARGET")
-
-        st.markdown(
-            """
-Fill in a few key fields below.  
-For all other features, the app will automatically use typical/median values from the dataset.
-"""
-        )
+        st.markdown("Fill in the applicant details below. All other features default to dataset medians.")
 
         with st.form("single_applicant_form"):
             col_left, col_right = st.columns(2)
-
             input_data = {}
 
-            # Numeric fields
             with col_left:
-                st.markdown("#### Numeric Features")
+                st.markdown("**Numeric Features**")
                 for col in num_pick:
                     series = home_df[col]
                     median_val = float(series.median()) if series.notna().any() else 0.0
                     min_val = float(series.min()) if series.notna().any() else median_val * 0.5
                     max_val = float(series.max()) if series.notna().any() else median_val * 1.5
-
-                    val = st.number_input(
-                        f"{col}",
-                        value=median_val,
-                        min_value=min_val,
-                        max_value=max_val,
-                        step=max((max_val - min_val) / 1000.0, 1e-3),
-                    )
+                    val = st.number_input(col, value=median_val, min_value=min_val, max_value=max_val,
+                                        step=max((max_val - min_val) / 1000.0, 1e-3))
                     input_data[col] = val
 
-            # Categorical fields
             with col_right:
-                st.markdown("#### Categorical Features")
+                st.markdown("**Categorical Features**")
                 for col in cat_pick:
                     series = home_df[col].dropna()
-                    if series.empty:
-                        options = ["(missing)"]
-                        default_idx = 0
-                    else:
-                        unique_vals = series.value_counts().index.tolist()
-                        options = unique_vals[:20]
-                        options.insert(0, "(missing)")
-                        default_idx = 0
-
-                    choice = st.selectbox(f"{col}", options, index=default_idx)
+                    options = ["(missing)"] + (series.value_counts().index.tolist()[:20] if not series.empty else [])
+                    choice = st.selectbox(col, options)
                     input_data[col] = None if choice == "(missing)" else choice
 
-            submitted = st.form_submit_button("Score Applicant")
+            submitted = st.form_submit_button("🎯 Score Applicant", use_container_width=True)
 
         if submitted:
-            # Build a full row with all training columns
             row = {}
-
             for col in feature_cols:
                 if col in input_data:
                     row[col] = input_data[col]
                 elif col in home_df.columns:
-                    # Use median/mode from dataset
-                    if home_df[col].dtype.kind in "bifc":  # numeric
+                    if home_df[col].dtype.kind in "bifc":
                         row[col] = float(home_df[col].median())
                     else:
-                        # categorical
                         mode_val = home_df[col].mode(dropna=True)
                         row[col] = mode_val.iloc[0] if not mode_val.empty else None
                 else:
                     row[col] = None
 
             df_input = pd.DataFrame([row])
-
             prob = best_model.predict_proba(df_input)[:, 1][0]
-            st.metric(
-                "Predicted Default Probability",
-                f"{prob:.2%}",
-                help="Higher probability = higher estimated risk of default.",
-            )
 
-            st.markdown(
-                """
-**Interpretation (high level):**
+            # Risk bucket
+            if prob >= 0.6:
+                risk_class = "risk-high"
+                risk_label = "🔴 HIGH RISK"
+                risk_color = "#f87171"
+            elif prob >= 0.3:
+                risk_class = "risk-medium"
+                risk_label = "🟡 MEDIUM RISK"
+                risk_color = "#fbbf24"
+            else:
+                risk_class = "risk-low"
+                risk_label = "🟢 LOW RISK"
+                risk_color = "#4ade80"
 
-- Values closer to **0%** → model believes this client looks similar to **good payers** in the data.  
-- Values closer to **100%** → model believes this client looks similar to **high-risk defaulters**.
-"""
-            )
+            st.markdown("<br>", unsafe_allow_html=True)
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.markdown(f"""
+<div class="{risk_class}">
+    <div class="risk-label">PREDICTED DEFAULT PROBABILITY</div>
+    <div class="risk-value">{prob:.1%}</div>
+    <div class="risk-tag" style="color:{risk_color}">{risk_label}</div>
+</div>""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # SHAP Waterfall for this prediction
+            st.markdown('<div class="section-header">🧠 Why this score? — SHAP Explanation</div>', unsafe_allow_html=True)
+
+            if HAS_SHAP:
+                with st.spinner("Computing SHAP values..."):
+                    sv, feat_names, base_val = compute_single_shap(home_result, df_input)
+
+                if sv is not None:
+                    fig_wf = plot_waterfall(sv, feat_names, base_val, prob, top_n=10)
+                    st.plotly_chart(fig_wf, use_container_width=True)
+
+                    # Top 3 drivers in plain English
+                    df_sv = pd.DataFrame({"feature": feat_names, "shap": sv})
+                    df_sv["abs"] = df_sv["shap"].abs()
+                    top3 = df_sv.nlargest(3, "abs")
+
+                    st.markdown("**Top 3 drivers for this prediction:**")
+                    for _, r in top3.iterrows():
+                        direction = "⬆️ increased" if r["shap"] > 0 else "⬇️ decreased"
+                        st.markdown(f"- **{r['feature']}** {direction} default risk by `{r['shap']:+.3f}`")
+                else:
+                    st.info("SHAP explanation unavailable for this prediction.")
+            else:
+                st.info("Install `shap` package to enable prediction explanations.")
 
 
 # ------------------------------------------------------------------------------
@@ -693,83 +758,137 @@ For all other features, the app will automatically use typical/median values fro
 # ------------------------------------------------------------------------------
 
 with tabs[4]:
-    st.subheader("Batch Scoring (Upload Multiple Applicants)")
+    st.markdown('<div class="section-header">Batch Scoring</div>', unsafe_allow_html=True)
 
-    if (home_df is None) or (home_result is None):
-        st.warning(
-            "Home Credit sample or trained models are not available, "
-            "so batch scoring is disabled."
-        )
+    if home_df is None or home_result is None:
+        st.warning("Models not available.")
     else:
-        # Use the same feature set the models were trained on
         feature_cols = home_result["feature_cols"]
-
-        # Take first 5 rows as an example template
         template_df = home_df[feature_cols].head(5)
-        template_csv_bytes = template_df.to_csv(index=False).encode("utf-8")
+        template_csv = template_df.to_csv(index=False).encode("utf-8")
 
-        st.markdown(
-            """
-1. **Download** the CSV template (from the sidebar or the button below).  
-2. **Fill in one row per applicant** (you can keep or delete the example rows).  
-3. **Upload** the completed CSV to get default probabilities for all applicants.
-"""
-        )
+        st.markdown("""
+1. Download the CSV template below
+2. Fill in one row per applicant
+3. Upload to get default probabilities for all applicants
+""")
+        st.download_button("⬇️ Download batch template", data=template_csv,
+                          file_name="batch_template.csv", mime="text/csv")
 
-        # Download button inside the main Batch tab
-        st.download_button(
-            label="⬇️ Download batch template (Home Credit features)",
-            data=template_csv_bytes,
-            file_name="home_credit_batch_template.csv",
-            mime="text/csv",
-            key="batch_template_main",
-        )
-
-
-        # --- File uploader for completed batch file ---
-        uploaded_batch = st.file_uploader(
-            "Upload completed batch CSV", type="csv", key="batch_uploader"
-        )
-
-        if uploaded_batch is not None:
+        uploaded = st.file_uploader("Upload completed CSV", type="csv")
+        if uploaded:
             try:
-                batch_df = pd.read_csv(uploaded_batch)
-
-                # Check for missing required columns
-                missing_cols = [c for c in feature_cols if c not in batch_df.columns]
-                if missing_cols:
-                    st.error(
-                        "Your file is missing the following required columns:\n\n"
-                        + ", ".join(missing_cols)
-                    )
+                batch_df = pd.read_csv(uploaded)
+                missing = [c for c in feature_cols if c not in batch_df.columns]
+                if missing:
+                    st.error(f"Missing columns: {', '.join(missing)}")
                 elif batch_df.shape[0] == 0:
-                    # Only headers, no rows
-                    st.warning(
-                        "The uploaded file has column headers but **no rows**.\n\n"
-                        "Please add at least one applicant (one row) before uploading."
-                    )
+                    st.warning("File has no rows. Please add applicant data.")
                 else:
-                    # Use the best model from Model Performance
-                    best_model = home_result["best_model"]
-
-                    X_batch = batch_df[feature_cols]
-                    probs = best_model.predict_proba(X_batch)[:, 1]
-
+                    probs = home_result["best_model"].predict_proba(batch_df[feature_cols])[:, 1]
                     result_df = batch_df.copy()
                     result_df["default_probability"] = probs
+                    result_df["risk_tier"] = pd.cut(probs, bins=[0, 0.3, 0.6, 1.0],
+                                                   labels=["Low", "Medium", "High"])
 
-                    st.markdown("#### Preview of scored applicants")
-                    st.dataframe(result_df.head())
+                    st.markdown(f"**Scored {len(result_df):,} applicants**")
 
-                    # Allow user to download full scored file
-                    scored_csv_bytes = result_df.to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        label="⬇️ Download scored CSV (with default probabilities)",
-                        data=scored_csv_bytes,
-                        file_name="home_credit_batch.csv",   # <-- requested name
-                        mime="text/csv",
-                        key="batch_scored_download",
-                    )
+                    # Risk distribution
+                    vc = result_df["risk_tier"].value_counts().reset_index()
+                    fig = px.pie(vc, names="risk_tier", values="count",
+                               color="risk_tier",
+                               color_discrete_map={"Low": "#4ade80", "Medium": "#fbbf24", "High": "#f87171"},
+                               title="Risk Tier Distribution")
+                    fig.update_layout(paper_bgcolor="#0f172a", font=dict(color="#e2e8f0"))
+                    st.plotly_chart(fig, use_container_width=True)
 
+                    st.dataframe(result_df.head(20), use_container_width=True)
+                    st.download_button("⬇️ Download scored CSV",
+                                      data=result_df.to_csv(index=False).encode("utf-8"),
+                                      file_name="scored_applicants.csv", mime="text/csv")
             except Exception as e:
-                st.error(f"Something went wrong while scoring your file: {e}")
+                st.error(f"Error: {e}")
+
+
+# ------------------------------------------------------------------------------
+#  TAB 6 – SHAP EXPLAINABILITY (GLOBAL)
+# ------------------------------------------------------------------------------
+
+with tabs[5]:
+    st.markdown('<div class="section-header">🧠 SHAP Explainability — Global Model Insights</div>', unsafe_allow_html=True)
+
+    if home_result is None:
+        st.warning("Models not available.")
+    elif not HAS_SHAP:
+        st.warning("SHAP not installed. Run: `pip install shap`")
+    elif home_result.get("shap_values") is None:
+        st.warning("SHAP values could not be computed. Check model compatibility.")
+    else:
+        shap_values = home_result["shap_values"]
+        feature_names = home_result["feature_names_out"]
+        best_name = home_result["best_name"]
+
+        st.markdown(f"Showing SHAP analysis for **{best_name}** — the best performing model.")
+
+        st.markdown("""
+> **What is SHAP?** SHAP (SHapley Additive exPlanations) fairly credits each feature for its contribution
+> to a prediction — like splitting a restaurant bill based on what each person actually ate.
+> Positive values push toward default. Negative values push away from default.
+""")
+
+        st.markdown("---")
+
+        # Global importance bar chart
+        st.markdown("#### Global Feature Importance (Mean |SHAP| across all test samples)")
+        fig_global = plot_shap_summary(shap_values, feature_names, top_n=15)
+        st.plotly_chart(fig_global, use_container_width=True)
+
+        st.markdown("---")
+
+        # SHAP distribution per feature (beeswarm-style using box plots)
+        st.markdown("#### SHAP Value Distribution per Feature")
+        mean_abs = np.abs(shap_values).mean(axis=0)
+        top_idx = np.argsort(mean_abs)[::-1][:10]
+        top_features = [feature_names[i] for i in top_idx]
+        top_shap = shap_values[:, top_idx]
+
+        fig_dist = go.Figure()
+        colors_dist = px.colors.sequential.Blues[3:]
+        for i, (feat, vals) in enumerate(zip(top_features, top_shap.T)):
+            fig_dist.add_trace(go.Box(
+                y=vals, name=feat,
+                marker_color=colors_dist[i % len(colors_dist)],
+                boxmean=True,
+            ))
+        fig_dist.update_layout(
+            title="SHAP Value Spread per Top Feature",
+            plot_bgcolor="#0f172a", paper_bgcolor="#0f172a",
+            font=dict(color="#e2e8f0"),
+            yaxis=dict(gridcolor="#1e3a5f", title="SHAP Value"),
+            xaxis=dict(tickangle=-30),
+            height=450,
+            showlegend=False,
+        )
+        st.plotly_chart(fig_dist, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("#### How to Read This")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("""
+<div style="background:#1e3a5f; border-radius:10px; padding:1rem;">
+<h4 style="color:#4ade80">🟢 Negative SHAP</h4>
+<p style="color:#e2e8f0; font-size:0.9rem">Feature pushed prediction <b>away from default</b>. Good sign for the applicant.</p>
+</div>""", unsafe_allow_html=True)
+        with col2:
+            st.markdown("""
+<div style="background:#1e3a5f; border-radius:10px; padding:1rem;">
+<h4 style="color:#f87171">🔴 Positive SHAP</h4>
+<p style="color:#e2e8f0; font-size:0.9rem">Feature pushed prediction <b>toward default</b>. Risk factor for the applicant.</p>
+</div>""", unsafe_allow_html=True)
+        with col3:
+            st.markdown("""
+<div style="background:#1e3a5f; border-radius:10px; padding:1rem;">
+<h4 style="color:#4fc3f7">📊 Bar Height</h4>
+<p style="color:#e2e8f0; font-size:0.9rem">Average absolute impact across all applicants. Taller = more important globally.</p>
+</div>""", unsafe_allow_html=True)
