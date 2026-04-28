@@ -275,19 +275,24 @@ def train_home_models(df: pd.DataFrame):
 # ------------------------------------------------------------------------------
 
 def pick_single_input_features(df, target_col="TARGET"):
-    df = df.drop(columns=[c for c in df.columns if c.upper().startswith("SK_ID")], errors="ignore")
-    df_feat = df.drop(columns=[target_col], errors="ignore")
-
-    num_cols_all = df_feat.select_dtypes(include="number").columns.tolist()
-    cat_cols_all = df_feat.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
-
-    def top_by_non_null(cols, k):
-        if not cols:
-            return []
-        counts = df_feat[cols].notna().sum().sort_values(ascending=False)
-        return [c for c in counts.index[:k]]
-
-    return top_by_non_null(num_cols_all, k=6), top_by_non_null(cat_cols_all, k=4)
+    """Return curated human-friendly fields for the scoring form."""
+    available = set(df.columns.str.upper())
+    preferred_num = ["AMT_INCOME_TOTAL", "AMT_CREDIT", "AMT_ANNUITY",
+                     "CNT_CHILDREN", "DAYS_BIRTH", "DAYS_EMPLOYED"]
+    preferred_cat = ["NAME_INCOME_TYPE", "NAME_EDUCATION_TYPE",
+                     "NAME_FAMILY_STATUS", "FLAG_OWN_REALTY"]
+    col_map = {c.upper(): c for c in df.columns}
+    num_pick = [col_map[c] for c in preferred_num if c in available]
+    cat_pick = [col_map[c] for c in preferred_cat if c in available]
+    # Fallback if preferred cols not in dataset
+    if len(num_pick) < 3:
+        df_feat = df.drop(columns=[c for c in df.columns if c.upper().startswith("SK_ID")]
+                          + [target_col], errors="ignore")
+        num_all = df_feat.select_dtypes(include="number").columns.tolist()
+        counts = df_feat[num_all].notna().sum().sort_values(ascending=False)
+        extras = [c for c in counts.index if c not in num_pick]
+        num_pick = (num_pick + extras)[:6]
+    return num_pick, cat_pick
 
 
 # ------------------------------------------------------------------------------
@@ -690,8 +695,17 @@ with tabs[3]:
                     min_val = float(series.min()) if series.notna().any() else 0.0
                     max_val = float(series.max()) if series.notna().any() else median_val * 2
 
-                    # Clean label — replace underscores, title case
-                    label = col.replace("_", " ").title()
+                    # Human-friendly labels for known columns
+                    LABEL_MAP = {
+                        "AMT_INCOME_TOTAL": "Annual Income",
+                        "AMT_CREDIT": "Loan Amount Requested",
+                        "AMT_ANNUITY": "Monthly Repayment Amount",
+                        "CNT_CHILDREN": "Number of Children",
+                        "DAYS_BIRTH": "Date of Birth",
+                        "DAYS_EMPLOYED": "Employment Start Date",
+                        "REGION_POPULATION_RELATIVE": "Region Population Density",
+                    }
+                    label = LABEL_MAP.get(col.upper(), col.replace("_", " ").title())
 
                     if col.upper() in DATE_COLS:
                         # Show a date picker — convert to days automatically
@@ -749,7 +763,16 @@ with tabs[3]:
                 st.markdown("**Loan & Profile Details**")
                 for col in cat_pick:
                     series = home_df[col].dropna()
-                    label = col.replace("_", " ").title()
+                    CAT_LABEL_MAP = {
+                        "NAME_INCOME_TYPE": "Employment Type",
+                        "NAME_EDUCATION_TYPE": "Education Level",
+                        "NAME_FAMILY_STATUS": "Marital Status",
+                        "FLAG_OWN_REALTY": "Owns Property",
+                        "FLAG_OWN_CAR": "Owns a Car",
+                        "NAME_CONTRACT_TYPE": "Contract Type",
+                        "CODE_GENDER": "Gender",
+                    }
+                    label = CAT_LABEL_MAP.get(col.upper(), col.replace("_", " ").title())
                     options = ["(not specified)"] + (series.value_counts().index.tolist()[:20] if not series.empty else [])
                     choice = st.selectbox(label, options)
                     input_data[col] = None if choice == "(not specified)" else choice
