@@ -489,7 +489,7 @@ This dashboard answers that question with a full production-grade ML pipeline:
     st.markdown('<div class="section-header">Pipeline Architecture</div>', unsafe_allow_html=True)
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    for col, step, icon in zip(
+    for col, step in zip(
         [col1, col2, col3, col4, col5],
         ["Raw Data", "Preprocessing", "Model Training", "Evaluation", "Explanation"],
     ):
