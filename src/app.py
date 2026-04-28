@@ -54,7 +54,7 @@ except Exception:
 
 st.set_page_config(
     page_title="Credit Risk Intelligence Dashboard",
-    page_icon="💳",
+    page_icon="",
     layout="wide",
 )
 
@@ -432,7 +432,7 @@ st.markdown("""
             border-radius: 16px; padding: 2rem 2.5rem; margin-bottom: 1.5rem;
             border-bottom: 3px solid #4fc3f7;">
     <h1 style="color: #ffffff; margin: 0; font-size: 2rem; font-weight: 800;">
-        💳 Credit Risk Intelligence Dashboard
+         Credit Risk Intelligence Dashboard
     </h1>
     <p style="color: #94a3b8; margin: 0.5rem 0 0 0; font-size: 1rem;">
         End-to-end ML pipeline · XGBoost · SHAP Explainability · Home Credit Dataset
@@ -461,12 +461,12 @@ if home_df is not None and home_result is not None:
 # ------------------------------------------------------------------------------
 
 tabs = st.tabs([
-    "📋 Overview",
-    "🔍 Exploratory Analysis",
-    "📊 Model Performance",
-    "🎯 Single Applicant Scoring",
-    "📦 Batch Scoring",
-    "🧠 SHAP Explainability",
+    "Overview",
+    "Exploratory Analysis",
+    "Model Performance",
+    "Single Applicant Scoring",
+    "Batch Scoring",
+    "SHAP Explainability",
 ])
 
 
@@ -492,7 +492,6 @@ This dashboard answers that question with a full production-grade ML pipeline:
     for col, step, icon in zip(
         [col1, col2, col3, col4, col5],
         ["Raw Data", "Preprocessing", "Model Training", "Evaluation", "Explanation"],
-        ["📥", "⚙️", "🤖", "📊", "🧠"]
     ):
         col.markdown(f"""
 <div style="background:#1e3a5f; border-radius:10px; padding:1rem; text-align:center;">
@@ -582,7 +581,7 @@ with tabs[2]:
         metrics_df = home_result["metrics"]
         best_name = home_result["best_name"]
 
-        st.success(f"🏆 Best model by ROC-AUC: **{best_name}**")
+        st.success(f" Best model by ROC-AUC: **{best_name}**")
 
         # Metrics table with highlighting
         st.dataframe(metrics_df.style.highlight_max(axis=0, color="#14532d").format("{:.3f}"),
@@ -638,7 +637,7 @@ with tabs[2]:
         )
         st.plotly_chart(fig_roc, use_container_width=True)
 
-        with st.expander("📋 Full Classification Report"):
+        with st.expander(" Full Classification Report"):
             y_pred_best = home_result["best_model"].predict(home_result["X_test"])
             st.text(classification_report(home_result["y_test"], y_pred_best, digits=3))
 
@@ -682,7 +681,7 @@ with tabs[3]:
                     choice = st.selectbox(col, options)
                     input_data[col] = None if choice == "(missing)" else choice
 
-            submitted = st.form_submit_button("🎯 Score Applicant", use_container_width=True)
+            submitted = st.form_submit_button("Score Applicant", use_container_width=True)
 
         if submitted:
             row = {}
@@ -728,7 +727,7 @@ with tabs[3]:
             st.markdown("<br>", unsafe_allow_html=True)
 
             # SHAP Waterfall for this prediction
-            st.markdown('<div class="section-header">🧠 Why this score? — SHAP Explanation</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"> Why this score? — SHAP Explanation</div>', unsafe_allow_html=True)
 
             if HAS_SHAP:
                 with st.spinner("Computing SHAP values..."):
@@ -745,7 +744,7 @@ with tabs[3]:
 
                     st.markdown("**Top 3 drivers for this prediction:**")
                     for _, r in top3.iterrows():
-                        direction = "⬆️ increased" if r["shap"] > 0 else "⬇️ decreased"
+                        direction = " increased" if r["shap"] > 0 else " decreased"
                         st.markdown(f"- **{r['feature']}** {direction} default risk by `{r['shap']:+.3f}`")
                 else:
                     st.info("SHAP explanation unavailable for this prediction.")
@@ -772,7 +771,7 @@ with tabs[4]:
 2. Fill in one row per applicant
 3. Upload to get default probabilities for all applicants
 """)
-        st.download_button("⬇️ Download batch template", data=template_csv,
+        st.download_button(" Download batch template", data=template_csv,
                           file_name="batch_template.csv", mime="text/csv")
 
         uploaded = st.file_uploader("Upload completed CSV", type="csv")
@@ -815,7 +814,7 @@ with tabs[4]:
 # ------------------------------------------------------------------------------
 
 with tabs[5]:
-    st.markdown('<div class="section-header">🧠 SHAP Explainability — Global Model Insights</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"> SHAP Explainability — Global Model Insights</div>', unsafe_allow_html=True)
 
     if home_result is None:
         st.warning("Models not available.")
@@ -889,6 +888,6 @@ with tabs[5]:
         with col3:
             st.markdown("""
 <div style="background:#1e3a5f; border-radius:10px; padding:1rem;">
-<h4 style="color:#4fc3f7">📊 Bar Height</h4>
+<h4 style="color:#4fc3f7"> Bar Height</h4>
 <p style="color:#e2e8f0; font-size:0.9rem">Average absolute impact across all applicants. Taller = more important globally.</p>
 </div>""", unsafe_allow_html=True)
