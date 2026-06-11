@@ -491,9 +491,9 @@ This dashboard answers that question with a full production-grade ML pipeline:
 - **SHAP explainability** — understand *why* the model made every single decision
 """)
 
-    st.info("""**In my mind:** I actually started this project with a German credit dataset — the classic one everyone uses. The models looked great. Clean distributions, reasonable correlations, nice ROC curves. I was almost done when I realized the problem: it felt *too* clean. That dataset is essentially synthetic — it was constructed to be well-behaved, which means it couldn't surface the messy, uncomfortable patterns that show up in real lending data.
+    st.info("""**In my mind:** I actually started this project with a German credit dataset, the classic one everyone uses. The models looked great. Clean distributions, reasonable correlations, nice ROC curves. I was almost done when I realized the problem: it felt *too* clean. That dataset is essentially synthetic like it was constructed to be well-behaved, which means it couldn't surface the messy, uncomfortable patterns that show up in real lending data.
 
-So I scrapped it and started over with the Home Credit dataset. Real applications, real messiness. And the first thing that hit me was the class imbalance — ~8% default rate. Which means a model that just says "approve everyone" is 92% accurate. I actually ran that baseline. It looked fine on paper. That's when I understood why accuracy is the wrong metric for this problem entirely.""")
+So I scrapped it and started over with the Home Credit dataset. Real applications, real messiness. And the first thing that hit me was the class imbalance that is the 8% default rate. Which means a model that just says "approve everyone" is 92% accurate. I actually ran that baseline. It looked fine on paper. That's when I understood why accuracy is the wrong metric for this problem entirely.""")
 
     st.markdown('<div class="section-header">Pipeline Architecture</div>', unsafe_allow_html=True)
 
@@ -544,9 +544,9 @@ with tabs[1]:
 
             st.info("""**In my mind:** The class imbalance was obvious from this chart. But what I didn't expect was what happened when I tried to fix it.
 
-I oversampled the minority class to balance things out — and my model metrics jumped. Precision up, recall up, everything looked better. I was pleased with myself for about ten minutes. Then I looked at what the model was actually learning. It had latched onto a handful of outliers in the minority class and was essentially memorizing them. One applicant with an extreme income-to-loan ratio was reshaping the entire decision boundary.
+I oversampled the minority class to balance things out and my model metrics jumped. Precision up, recall up, everything looked better. I was pleased with myself for about ten minutes. Then I looked at what the model was actually learning. It had latched onto a handful of outliers in the minority class and was essentially memorizing them. One applicant with an extreme income-to-loan ratio was reshaping the entire decision boundary.
 
-That's when I understood why real financial data is different from textbook data. A single outlier isn't noise — it can completely change the story the model tells. I had to go back, cap the outliers, and think much more carefully about which features to include before touching the class balance.""")
+That's when I understood why real financial data is different from textbook data. A single outlier isn't noise but it can completely change the story the model tells. I had to go back, cap the outliers, and think much more carefully about which features to include before touching the class balance.""")
 
         st.markdown("---")
         num_cols_eda = [c for c in df_plot.select_dtypes(include="number").columns if c != "TARGET"]
@@ -605,9 +605,9 @@ with tabs[2]:
 
         st.info("""**In my mind:** My first model was Logistic Regression. It made sense as a starting point — interpretable, fast, and credit risk is one of the classic use cases for it. The AUC was decent.
 
-But when I looked at the residuals, I kept seeing the model struggle with applicants in the middle — moderate income, moderate loan size, inconsistent employment. Not clear defaulters, not clear safe bets. The relationships weren't linear. Income alone doesn't tell you much; it's income *relative to* loan size *relative to* employment stability, and Logistic Regression can't capture that interaction without you manually engineering the feature.
+But when I looked at the residuals, I kept seeing the model struggle with applicants in the middle....moderate income, moderate loan size, inconsistent employment. Not clear defaulters, not clear safe bets. The relationships weren't linear. Income alone doesn't tell you much; it's income *relative to* loan size *relative to* employment stability, and Logistic Regression can't capture that interaction without you manually engineering the feature.
 
-That's what pushed me toward tree-based methods. XGBoost finds those interactions automatically. It also handles the missing values in this dataset without me having to impute everything first. The AUC improvement wasn't dramatic — but the *types* of errors it made were meaningfully different.""")
+That's what pushed me toward tree-based methods. XGBoost finds those interactions automatically. It also handles the missing values in this dataset without me having to impute everything first. The AUC improvement wasn't dramatic but the *types* of errors it made were meaningfully different.""")
 
         st.markdown("---")
         col1, col2 = st.columns(2)
@@ -659,9 +659,9 @@ That's what pushed me toward tree-based methods. XGBoost finds those interaction
         )
         st.plotly_chart(fig_roc, use_container_width=True)
 
-        st.info("""**In my mind:** I stared at these ROC curves for a while trying to figure out what threshold to use. 0.5 is the default, but that's arbitrary — it assumes false positives and false negatives are equally bad, which they're obviously not in lending.
+        st.info("""**In my mind:** I stared at these ROC curves for a while trying to figure out what threshold to use. 0.5 is the default, but that's arbitrary because it assumes false positives and false negatives are equally bad, which they're obviously not in lending.
 
-A missed default costs the bank real money. A false alarm just means a loan officer spends ten minutes reviewing someone who would have been fine. So I shifted the threshold down to 0.3, which catches more defaults at the cost of more false alarms. Whether that tradeoff is right depends entirely on the bank's risk appetite — it's not a modeling decision, it's a business decision. I found that distinction really important. The model doesn't decide the threshold. The business does. The model just makes the tradeoff visible.""")
+A missed default costs the bank real money. A false alarm just means a loan officer spends ten minutes reviewing someone who would have been fine. So I shifted the threshold down to 0.3, which catches more defaults at the cost of more false alarms. Whether that tradeoff is right depends entirely on the bank's risk appetite since it's not a modeling decision, it's a business decision. I found that distinction really important. The model doesn't decide the threshold. The business does. The model just makes the tradeoff visible.""")
 
         with st.expander("Full Classification Report"):
             y_pred_best = home_result["best_model"].predict(home_result["X_test"])
@@ -684,9 +684,9 @@ with tabs[3]:
 
         st.info("""**In my mind:** I kept thinking about what it feels like to be on the other side of this model. You apply for a loan, you wait, and then you get a rejection letter. No reason given. Just no.
 
-That's not just frustrating — in some jurisdictions it's a legal problem. Lenders are required to explain adverse decisions. But more than the legal angle, it just felt *wrong* to build a system that makes a consequential decision about someone's life and gives them nothing to work with.
+That's not just frustrating and in some jurisdictions it's a legal problem. Lenders are required to explain adverse decisions. But more than the legal angle, it just felt wrong to build a system that makes a consequential decision about someone's life and gives them nothing to work with.
 
-That's what pulled me toward SHAP. Not because it makes the model more accurate — it doesn't. But because it means a loan officer can sit across from an applicant and say: "your employment history is the main factor here, not your income." That's something a person can actually act on.""")
+That's what pulled me toward SHAP. Not because it makes the model more accurate. But because it means a loan officer can sit across from an applicant and say: "your employment history is the main factor here, not your income." That's something a person can actually act on.""")
 
         st.markdown("Fill in the applicant details below. All other features default to dataset medians automatically.")
 
@@ -957,11 +957,11 @@ with tabs[5]:
 > Positive values push toward default. Negative values push away from default.
 """)
 
-        st.info("""**In my mind:** The SHAP values surprised me. I went in expecting income and loan amount to dominate — those are the obvious variables a human would focus on. But `DAYS_EMPLOYED` kept showing up near the top. How long someone has been at their current job is a stronger signal than how much they earn.
+        st.info("""**In my mind:** The SHAP values surprised me. I went in expecting income and loan amount to dominate because those are the obvious variables a human would focus on. But `DAYS_EMPLOYED` kept showing up near the top. How long someone has been at their current job is a stronger signal than how much they earn.
 
-That made me pause. It means a high-income applicant who just switched jobs looks riskier to this model than a moderate-income applicant with five years of stable employment. Is that right? Probably, actually — income can change, but job stability reflects something about a person's financial behavior over time.
+That made me pause. It means a high-income applicant who just switched jobs looks riskier to this model than a moderate-income applicant with five years of stable employment. Is that right? Probably, actually income can change, but job stability reflects something about a person's financial behavior over time.
 
-What I didn't expect was how much the SHAP values varied across applicants. The global importance chart shows averages, but individual predictions told very different stories. That's the part that felt most real to me — there's no single profile of a defaulter. The model had to learn dozens of different risk patterns, and SHAP was the only way to see them.""")
+What I didn't expect was how much the SHAP values varied across applicants. The global importance chart shows averages, but individual predictions told very different stories. That's the part that felt most real to me since there's no single profile of a defaulter. The model had to learn dozens of different risk patterns, and SHAP was the only way to see them.""")
 
         st.markdown("---")
 
