@@ -548,7 +548,8 @@ I oversampled the minority class to balance things out — and my model metrics 
 
 That's when I understood why real financial data is different from textbook data. A single outlier isn't noise — it can completely change the story the model tells. I had to go back, cap the outliers, and think much more carefully about which features to include before touching the class balance.""")
 
-        st.markdown("---") = [c for c in df_plot.select_dtypes(include="number").columns if c != "TARGET"]
+        st.markdown("---")
+        num_cols_eda = [c for c in df_plot.select_dtypes(include="number").columns if c != "TARGET"]
 
         col1, col2 = st.columns(2)
         with col1:
